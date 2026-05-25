@@ -49,3 +49,27 @@ logs/
 
 # OS
 .DS_Store
+# Secrets
+.env
+
+# Dépendances
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# Builds
+dist/
+backend/dist/
+.next/
+frontend/.next/
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
