@@ -1,0 +1,117 @@
+import { Router, Request, Response, NextFunction } from "express";
+import authenticate from "../middleware/authenticate";
+import { authorize } from "../middleware/authorize";
+import prisma from "../utils/database";
+import bcrypt from "bcryptjs";
+
+const router = Router();
+
+// Lister les utilisateurs du tenant
+router.get(
+  "/",
+  authenticate,
+  authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const users = await prisma.user.findMany({
+        where: { tenantId: req.user!.tenantId },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          isActive: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      return res.json(users);
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+// Créer un nouvel utilisateur
+router.post(
+  "/",
+  authenticate,
+  authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { email, name, role, password } = req.body;
+      if (!email || !name || !role || !password) {
+        return res.status(400).json({ error: "Tous les champs sont requis" });
+      }
+
+      const passwordHash = await bcrypt.hash(password, 10);
+      const user = await prisma.user.create({
+        data: {
+          tenantId: req.user!.tenantId,
+          email,
+          name,
+          role,
+          passwordHash,
+        },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          isActive: true,
+          createdAt: true,
+        },
+      });
+      return res.status(201).json(user);
+    } catch (err: any) {
+      if (err.code === "P2002") {
+        return res.status(409).json({ error: "Cet email existe déjà" });
+      }
+      return next(err);
+    }
+  }
+);
+
+// Basculer l'état actif/inactif
+router.patch(
+  "/:id/toggle",
+  authenticate,
+  authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const user = await prisma.user.findFirst({
+        where: { id: req.params.id, tenantId: req.user!.tenantId },
+      });
+      if (!user) return res.status(404).json({ error: "Utilisateur introuvable" });
+
+      const updated = await prisma.user.update({
+        where: { id: req.params.id },
+        data: { isActive: !user.isActive },
+      });
+      return res.json({ id: updated.id, isActive: updated.isActive });
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+// Changer le rôle
+router.patch(
+  "/:id/role",
+  authenticate,
+  authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { role } = req.body;
+      const updated = await prisma.user.update({
+        where: { id: req.params.id },
+        data: { role },
+      });
+      return res.json({ id: updated.id, role: updated.role });
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+export default router;

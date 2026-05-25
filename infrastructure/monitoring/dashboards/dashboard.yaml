@@ -1,0 +1,15 @@
+# Grafana dashboard configuration
+apiVersion: 1
+
+providers:
+  # Provider for the system health dashboard
+  - name: 'AFRIXORA System Health'
+    orgId: 1
+    folder: 'AFRIXORA'
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 60
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: true

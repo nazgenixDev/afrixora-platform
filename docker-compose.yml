@@ -1,0 +1,166 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg15
+    restart: unless-stopped
+    expose:
+      - "5432"
+    volumes:
+      - afrixora_postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=afrixora
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=afrixora_prod
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U afrixora -d afrixora_prod"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - afrixora_net
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    expose:
+      - "6379"
+    volumes:
+      - afrixora_redis_data:/data
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - afrixora_net
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    expose:
+      - "1883"
+      - "9001"
+    volumes:
+      - afrixora_mosquitto_data:/mosquitto/data
+      - afrixora_mosquitto_log:/mosquitto/log
+      - ./infrastructure/docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./infrastructure/docker/mosquitto_passwd:/mosquitto/config/passwd:ro
+    networks:
+      - afrixora_net
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    expose:
+      - "4000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://afrixora:${DB_PASSWORD}@postgres:5432/afrixora_prod
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
+      - JWT_REFRESH_EXPIRES_IN=${JWT_REFRESH_EXPIRES_IN}
+      - MQTT_URL=mqtt://mosquitto:1883
+      - MQTT_API_USER=${MQTT_API_USER}
+      - MQTT_API_PASSWORD=${MQTT_API_PASSWORD}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - DOMAIN=${DOMAIN}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+      - ENERGY_COST_PER_KWH=${ENERGY_COST_PER_KWH}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    networks:
+      - afrixora_net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`api.${DOMAIN}`)"
+      - "traefik.http.services.api.loadbalancer.server.port=4000"
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=https://api.${DOMAIN}
+    depends_on:
+      - api
+    networks:
+      - afrixora_net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+
+  traefik:
+    image: traefik:v3.0
+    restart: unless-stopped
+    expose:
+      - "80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - afrixora_traefik_data:/etc/traefik
+    command:
+      - "--api.insecure=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--log.level=INFO"
+    networks:
+      - afrixora_net
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - traefik
+    networks:
+      - afrixora_net
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    expose:
+      - "3000"
+    volumes:
+      - afrixora_grafana_data:/var/lib/grafana
+      - ./infrastructure/monitoring/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./infrastructure/monitoring/dashboards:/etc/grafana/provisioning/dashboards:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=https://grafana.${DOMAIN}
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    depends_on:
+      - postgres
+    networks:
+      - afrixora_net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN}`)"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+
+volumes:
+  afrixora_postgres_data:
+  afrixora_redis_data:
+  afrixora_mosquitto_data:
+  afrixora_mosquitto_log:
+  afrixora_grafana_data:
+  afrixora_traefik_data:
+
+networks:
+  afrixora_net:
+    driver: bridge
