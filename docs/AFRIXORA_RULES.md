@@ -1,8 +1,15 @@
+
+---
+
+## 2. AFRIXORA_RULES.md (Version 2.0)
+
+```markdown
 # CLAUDE_RULES.md — AFRIXORA™ Development Rules for Claude Code
 
 > These rules are **mandatory** and apply to every code generation task on this project.
 > Non-compliance breaks the architecture and increases maintenance cost for a solo developer.
 > When in doubt: do less, not more.
+> **Version 2.0 — Updated after MVP completion (May 2026)**
 
 ---
 
@@ -31,22 +38,11 @@ The backend is a **single monolithic Express.js application**. It will not be sp
 - gRPC — REST only
 
 **System layers (fixed, do not restructure):**
-```
-IoT Devices
-  → Edge Gateway (Raspberry Pi)
-    → MQTT Broker (Mosquitto)
-      → Backend API (Express.js)
-        → Database (PostgreSQL + TimescaleDB)
-          → Web Dashboard (Next.js 14)
-```
 
-Each layer has a defined responsibility. Do not merge layers or bypass them.
 
 ---
 
 ## 3. Technology Stack (Do Not Change)
-
-Only the technologies listed below are authorized. **Do not introduce new libraries, frameworks, ORMs, or services without explicit written approval from the developer.**
 
 ### Backend
 | Technology | Version | Purpose |
@@ -57,11 +53,12 @@ Only the technologies listed below are authorized. **Do not introduce new librar
 | Prisma ORM | 5.x | PostgreSQL access |
 | Zod | 3.x | Input validation |
 | Socket.IO | 4.x | Real-time WebSocket |
-| @socket.io/redis-adapter | latest | Redis adapter for Socket.IO scaling |
-| express-rate-limit | latest | Brute-force protection — /auth/login (10 req/15min/IP) |
+| express-rate-limit | latest | Brute-force protection |
 | Winston | — | Logging |
 | Resend | — | Transactional email |
 | pdfkit | — | PDF report generation |
+| bcryptjs | — | Password hashing |
+| jsonwebtoken | — | JWT signing/verification |
 
 ### Frontend
 | Technology | Purpose |
@@ -74,6 +71,7 @@ Only the technologies listed below are authorized. **Do not introduce new librar
 | Recharts | Data visualization |
 | Axios | HTTP client |
 | Socket.IO client | Real-time events |
+| Lucide React | Icons |
 
 ### Data
 | Technology | Version | Purpose |
@@ -92,38 +90,21 @@ Only the technologies listed below are authorized. **Do not introduce new librar
 | Technology | Purpose |
 |-----------|---------|
 | Docker + Docker Compose | Containerization |
-| Traefik v3 | Internal reverse proxy + container routing |
-| Grafana | Operational monitoring (datasource TimescaleDB) |
-| Cloudflare Tunnel (cloudflared) | External HTTPS — no public IP needed |
-
-> If a task seems to require a technology not in this list, stop and ask the developer before proceeding.
-
-### Security constraints (mandatory)
-- JWT signing algorithm : **HS256** (JWT_SECRET). RS256 prévu Phase 2.
-- Rate limiting : `express-rate-limit` sur `POST /auth/login` — 10 requêtes / 15 min / IP.
-- MQTT gateways distants : **WebSockets port 9001** (Cloudflare Tunnel). TCP 1883 = réseau Docker interne uniquement.
+| Traefik v3 | Internal reverse proxy |
+| Grafana | Operational monitoring |
+| Cloudflare Tunnel (cloudflared) | External HTTPS |
 
 ---
 
 ## 4. MVP Scope Restrictions
 
-The MVP includes **only two modules**. Code must only be generated for these:
+### ✅ In scope
+- AFRIXORA Building: buildings, zones, devices, device control, Socket.IO
+- AFRIXORA Energy: MQTT ingestion, TimescaleDB, analytics, alerts, CSV/PDF exports
+- Administration: user management (RBAC), API keys, request logs, settings
 
-| Module | Status |
-|--------|--------|
-| ✅ AFRIXORA Building | In scope — build this |
-| ✅ AFRIXORA Energy | In scope — build this |
-| ❌ AFRIXORA Secure | Out of scope — do not generate |
-| ❌ AFRIXORA Industry | Out of scope — do not generate |
-| ❌ AFRIXORA Agro | Out of scope — do not generate |
-| ❌ AFRIXORA Smart City | Out of scope — do not generate |
-| ❌ AI / ML features | Out of scope — do not generate |
-
-**If asked to generate code for an out-of-scope module:** refuse, state the reason, and redirect to the current active step in the development workflow.
-
-**AFRIXORA Building covers:** buildings, zones, devices, device control, real-time state via Socket.IO.
-
-**AFRIXORA Energy covers:** MQTT ingestion, TimescaleDB storage, energy analytics, threshold alerts, CSV/PDF exports.
+### ❌ Out of scope
+- Secure · Industry · Agro · Smart City · AI / ML
 
 ---
 
@@ -131,233 +112,138 @@ The MVP includes **only two modules**. Code must only be generated for these:
 
 Code is generated **one step at a time**, following the workflow defined in `AFRIXORA_CONTEXT.md`.
 
-**Rules:**
 1. Never generate the entire system at once.
-2. Each generation task must target one specific component (one route file, one service, one hook, etc.).
-3. Every component must be testable in isolation before moving to the next step.
-4. Follow this build order strictly:
-
-```
-Step 1 → Infrastructure & Auth
-Step 2 → Building Module (CRUD buildings, zones, devices)
-Step 3 → MQTT Ingestion (mqttWorker + TimescaleDB insert)
-Step 4 → Energy Module (time-series queries + energy endpoints)
-Step 5 → Automations (rule engine)
-Step 6 → Frontend Dashboard
-Step 7 → Reports + Production deployment
-```
-
-5. After generating each step, state clearly: what was built, what the validation criteria is, and what the next step is.
-6. Do not scaffold Step 4 code while the developer is still working on Step 2.
+2. Each generation task must target one specific component.
+3. Every component must be testable in isolation.
+4. Follow the build order strictly (Steps 1–7).
+5. After generating each step, state clearly: what was built, validation criteria, and next step.
+6. Do not scaffold future steps while working on current step.
 
 ---
 
 ## 6. Code Organization Rules
 
 ### Backend directory structure (fixed)
-```
+
 backend/src/
-├── routes/       → HTTP handlers only (validate input → call service → return response)
-├── services/     → All business logic and database access
-├── middleware/   → authenticate.ts · authorize.ts · validate.ts · errorHandler.ts
-└── utils/        → database.ts · redis.ts · logger.ts
-```
+├── routes/ → HTTP handlers only (validate → call service → return response)
+├── services/ → All business logic and database access
+├── middleware/ → authenticate.ts · authorize.ts · validate.ts · errorHandler.ts · requestLogger.ts
+└── utils/ → database.ts · redis.ts · logger.ts
+
 
 **Rules:**
-- Route handlers must not contain business logic. They call services, nothing more.
-- Services must not import from routes. Dependency flows one way: routes → services.
-- Validation happens in routes using Zod schemas before calling any service.
+- Route handlers must not contain business logic.
+- Validation happens in routes using Zod schemas.
 - Use `prisma` for all PostgreSQL queries.
-- Use **raw SQL** for `sensor_readings` TimescaleDB queries only — Prisma does not manage that table.
-- Errors are thrown from services and caught by the global `errorHandler.ts` middleware.
-- Do not use inline `try/catch` in route handlers unless there is a specific reason.
+- Use **raw SQL** only for `sensor_readings` TimescaleDB queries.
+- Errors are thrown from services and caught by `errorHandler.ts`.
+- Do not use inline `try/catch` in route handlers unless necessary.
 
 ### Frontend directory structure (fixed)
-```
+
 frontend/src/
-├── app/          → Next.js 14 App Router pages
-├── components/   → Reusable UI components (ui/, dashboard/, devices/, automations/, layout/)
-├── hooks/        → useSocket.ts · useBuilding.ts · useAuth.ts
-├── lib/          → api.ts · auth.ts · utils.ts
-└── store/        → Zustand global store
-```
+├── app/ → Next.js 14 App Router pages
+├── components/ → Reusable UI components (ui/, dashboard/, devices/, layout/, users/)
+├── hooks/ → useSocket.ts
+├── lib/ → api.ts · auth.ts · jwt.ts · utils.ts
+├── store/ → Zustand global store
+└── types/ → Shared TypeScript interfaces
+
 
 ---
 
 ## 7. Multi-Tenant Safety
 
-AFRIXORA is a **multi-tenant SaaS platform**. Data isolation is a hard requirement, not optional.
-
-**Rules that must be followed on every database operation:**
-
 1. Every Prisma query must include `where: { tenantId }`.
-2. `tenantId` is extracted **only from the verified JWT payload** — never from `req.body`, `req.params`, or `req.query`.
+2. `tenantId` is extracted **only from the verified JWT payload**.
 3. Never return data from one tenant to a user of another tenant.
-4. When creating resources, always set `tenantId` from the JWT, not from client input.
-5. TimescaleDB raw SQL queries must include `AND tenant_id = $1` in every `WHERE` clause.
-
-**Example pattern (always follow this):**
-```typescript
-// ✅ Correct
-const building = await prisma.building.findFirst({
-  where: { id: buildingId, tenantId: req.user.tenantId }
-});
-
-// ❌ Wrong — missing tenantId filter
-const building = await prisma.building.findFirst({
-  where: { id: buildingId }
-});
-```
-
-If a query is missing `tenantId`, it is a critical security bug. Do not generate such code.
+4. When creating resources, set `tenantId` from the JWT, not client input.
+5. TimescaleDB raw SQL queries must include `AND tenant_id = $1`.
 
 ---
 
 ## 8. MQTT Rules
 
-MQTT is the communication layer between IoT devices and the backend. The topic structure is fixed and must never be changed.
-
 ### Topic convention (strict)
-```
-afrixora/{tenantId}/{buildingId}/devices/{deviceId}/readings   → sensor data (device → cloud)
-afrixora/{tenantId}/{buildingId}/devices/{deviceId}/events     → events: motion, door (device → cloud)
-afrixora/{tenantId}/{buildingId}/devices/{deviceId}/commands   → control commands (cloud → device)
-afrixora/{tenantId}/{buildingId}/gateways/{gatewayId}/status   → gateway heartbeat
-afrixora/system/api_status                                     → API health (retained)
-```
 
-**Rules:**
-- Always use the exact topic format above. Never invent new topic structures.
-- Commands are published **to** `.../commands`. Never respond to commands on a readings topic.
-- The `mqttWorker.ts` subscribes to `afrixora/#` and routes messages by topic segments — do not change this routing logic without updating all downstream consumers.
-- MQTT payloads must follow the JSON format defined in `AFRIXORA_CONTEXT.md` (Section 6).
-- Do not add MQTT publish calls inside route handlers. MQTT publishing belongs in `services/`.
+afrixora/{tenantId}/{buildingId}/devices/{deviceId}/readings → sensor data
+afrixora/{tenantId}/{buildingId}/devices/{deviceId}/events → events
+afrixora/{tenantId}/{buildingId}/devices/{deviceId}/commands ← API commands
+afrixora/{tenantId}/{buildingId}/gateways/{gatewayId}/status → gateway heartbeat
+afrixora/system/api_status → API health
+
 
 ---
 
 ## 9. Code Quality
 
 ### Always do
-- Use **TypeScript** everywhere. No `.js` files in `backend/src/` or `frontend/src/`.
+- Use **TypeScript** everywhere. No `.js` files.
 - Use **`async/await`** for all asynchronous operations.
 - Type all function parameters and return values explicitly.
-- Keep functions short and focused on a single responsibility.
-- Use named exports. Avoid anonymous default exports for services and utilities.
-- Log meaningful messages with Winston. Include `tenantId` and `buildingId` in log context where relevant.
+- Keep functions short and focused.
+- Use named exports.
+- Log meaningful messages with Winston.
 
 ### Never do
-- Use callbacks (`function(err, result)` style).
-- Use `.then()` / `.catch()` chains — use `async/await` instead.
-- Nest logic more than 3 levels deep. Extract to named functions.
-- Use `any` type in TypeScript. Use `unknown` and narrow it, or define the type properly.
-- Hardcode configuration values. Use environment variables via `process.env`.
+- Use callbacks.
+- Use `.then()` / `.catch()` chains.
+- Nest logic more than 3 levels deep.
+- Use `any` type. Use `unknown` and narrow it.
+- Hardcode configuration values. Use environment variables.
 - Commit `.env` files, secrets, or credentials to Git.
-- Use `console.log` in production code. Use the Winston logger.
+- Use `console.log` in production code.
 
-### Code pattern for route handlers
+---
+
+## 10. New Patterns Established During MVP
+
+### JWT Profile Restoration
+When a user reloads the page, restore their profile from the JWT payload:
 ```typescript
-// Every route handler follows this exact pattern
-router.post('/:id/control', authenticate, authorize('OPERATOR'), async (req, res, next) => {
-  try {
-    const body = controlSchema.parse(req.body);           // 1. Validate with Zod
-    const result = await deviceService.control(           // 2. Call service
-      req.params.id,
-      req.user.tenantId,
-      body
-    );
-    res.json(result);                                     // 3. Return response
-  } catch (err) {
-    next(err);                                            // 4. Forward to errorHandler
-  }
-});
-```
+const payload = decodeJwtPayload(token);
+if (payload) {
+  useStore.getState().setAuth({ id: payload.userId, role: payload.role, tenantId: payload.tenantId }, token);
+}
+// If email/name missing, fetch from GET /users/me
 
----
+Request Logging Middleware
+All authenticated requests are logged to ApiLog table:
 
-## 10. Final Instruction for Claude
+app.use("/api/v1", requestLogger);
 
-Before generating any code for the AFRIXORA project, execute these steps in order:
+RBAC Sidebar Filtering
+Sidebar navigation items are filtered based on user role:
 
-```
-1. Read AFRIXORA_CONTEXT.md fully.
-2. Read AFRIXORA_RULES.md fully (this file).
-3. Identify which development step is currently active (Steps 1–7 in AFRIXORA_CONTEXT.md §10).
-4. Generate only the code requested for that specific step.
-5. Do not generate code for future steps.
-6. Do not modify the architecture.
-7. Do not introduce unlisted technologies.
-```
+const isAdmin = ['SUPER_ADMIN', 'TENANT_ADMIN'].includes(role);
+const navItems = isAdmin ? [...baseNav, ...adminNav] : baseNav;
 
-**After each code generation, confirm:**
-- [ ] All database queries include `tenantId`
-- [ ] No new technologies were introduced
-- [ ] Code is scoped to Building or Energy module only
-- [ ] TypeScript types are explicit — no `any`
-- [ ] MQTT topics follow the defined convention
-- [ ] Business logic is in `services/`, not in route handlers
+Password Reset Flow
+Admins reset user passwords via PATCH /users/:id/reset-password
 
-> If the developer's request conflicts with these rules, **do not comply silently**.
-> State the conflict clearly, explain why it violates the rules, and propose a compliant alternative.
+Users change own password via PATCH /users/change-password
 
----
+Both endpoints increment jwtVersion to invalidate existing tokens
 
-## 11. Docker Portability Rules
+11. Docker Portability Rules
+Zéro chemin absolu hôte. Use named Docker volumes.
 
-AFRIXORA™ doit rester portable sur n'importe quel serveur Docker. Ces règles s'appliquent à tous les fichiers d'infrastructure générés.
+Volumes Docker nommés obligatoires for all persistent data.
 
-### Règles obligatoires
+Zéro configuration réseau hôte. Use internal Docker network afrixora_net.
 
-**1. Zéro chemin absolu hôte.** Ne jamais monter de volumes avec des chemins absolus spécifiques à la machine.
+Zéro port exposé inutilement. PostgreSQL, Redis, Mosquitto use expose, not ports.
 
-```yaml
-# ❌ Interdit — chemin spécifique au CF1000
-volumes:
-  - /mnt/nvme0/afrixora/postgres:/var/lib/postgresql/data
+Variables d'environnement uniquement. All values from .env.
 
-# ✅ Correct — volume Docker nommé, portable partout
-volumes:
-  - afrixora_postgres_data:/var/lib/postgresql/data
-```
+Images officielles avec tag explicite.
 
-**2. Volumes Docker nommés obligatoires** pour toutes les données persistantes : postgres, redis, mosquitto, grafana. Déclarés dans la section `volumes:` racine du `docker-compose.yml`.
+Healthchecks obligatoires on postgres and redis.
 
-**3. Zéro configuration réseau hôte.** Ne jamais utiliser `network_mode: host`. Toujours utiliser le réseau Docker interne `afrixora_net` de type bridge.
+restart: unless-stopped on all services.
 
-**4. Zéro port exposé inutilement.** PostgreSQL, Redis et Mosquitto ne sont **jamais** exposés sur l'interface hôte.
+12. Demo Script
+Use start-demo.sh to launch the full stack with demo data:
 
-```yaml
-# ❌ Interdit — PostgreSQL exposé sur le réseau hôte
-postgres:
-  ports:
-    - "5432:5432"
-
-# ✅ Correct — accessible uniquement via réseau Docker
-postgres:
-  expose:
-    - "5432"
-```
-
-**5. Variables d'environnement uniquement.** Toute valeur qui peut changer selon la machine (domaine, mots de passe, tokens, URLs) doit venir du fichier `.env` via `${VAR}`. Ne jamais hardcoder ces valeurs dans `docker-compose.yml`.
-
-**6. Images officielles avec tag explicite.** Ne jamais utiliser une image sans tag de version.
-
-```yaml
-# ❌ Interdit
-image: postgres:latest
-
-# ✅ Correct
-image: timescale/timescaledb:latest-pg15
-```
-
-**7. Healthchecks obligatoires** sur postgres et redis. Les autres services utilisent `depends_on` avec condition `service_healthy` pour garantir le bon ordre de démarrage, quelle que soit la rapidité du serveur.
-
-**8. `restart: unless-stopped`** sur tous les services. Garantit le redémarrage automatique après coupure SNEL ou reboot du serveur, sans intervention manuelle.
-
-### Ce que cette règle permet
-
-Un développeur peut migrer AFRIXORA™ vers un nouveau serveur en moins d'une heure, avec zéro connaissance de la configuration interne. C'est un actif commercial : proposer cette garantie aux clients enterprise justifie un SLA premium.
-
----
-
-*AFRIXORA™ — © 2026 NAZGENIX SAS · afrixora.cd · Lubumbashi, RDC*
-*This file is part of the project documentation. Keep this file in the `docs/` folder alongside `AFRIXORA_CONTEXT.md`.*
+./start-demo.sh
