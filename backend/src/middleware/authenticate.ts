@@ -5,7 +5,6 @@ import logger from '../utils/logger';
 
 const prisma = new PrismaClient();
 
-// JWT token payload interface
 interface TokenPayload {
   userId: string;
   tenantId: string;
@@ -13,7 +12,6 @@ interface TokenPayload {
   jwtVersion: number;
 }
 
-// Extend Express Request interface to include user property
 declare global {
   namespace Express {
     interface Request {
@@ -26,55 +24,43 @@ declare global {
   }
 }
 
-/**
- * Authentication middleware
- * Verifies JWT token from Authorization header
- * Attaches user data to request object
- */
-export const authenticate = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
+export const authenticate = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // Get token from Authorization header
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    // Extract token
     const token = authHeader.split(' ')[1];
     if (!token) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
     try {
-      // Verify token
-      const decoded = jwt.verify(
-        token,
-        process.env.JWT_SECRET || 'jwt-secret'
-      ) as TokenPayload;
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev_jwt_secret_change_in_production') as TokenPayload;
 
-      // Check if user exists and jwtVersion matches
       const user = await prisma.user.findUnique({
         where: { id: decoded.userId },
-        select: { jwtVersion: true, isActive: true },
+        select: { jwtVersion: true, isActive: true, role: true, tenantId: true, tenant: { select: { isActive: true } } },
       });
 
       if (!user || !user.isActive || user.jwtVersion !== decoded.jwtVersion) {
         return res.status(401).json({ error: 'Invalid or expired token' });
       }
 
-      // Attach user data to request
-      req.user = {
-        userId: decoded.userId,
-        tenantId: decoded.tenantId,
-        role: decoded.role,
-      };
-      return next();
+      // SUPER_ADMIN exempté de la vérification du tenant
+      if (user.role !== 'SUPER_ADMIN' && !user.tenant.isActive) {
+        return res.status(401).json({ error: 'Tenant désactivé' });
+      }
 
-      next();
+      const impersonatedTenantId = req.headers['x-tenant-id'] as string | undefined;
+      if (user.role === 'SUPER_ADMIN' && impersonatedTenantId) {
+        req.user = { userId: decoded.userId, tenantId: impersonatedTenantId, role: user.role };
+      } else {
+        req.user = { userId: decoded.userId, tenantId: user.tenantId, role: user.role };
+      }
+
+      return next();
     } catch (error) {
       logger.warn('JWT verification failed', { error });
       return res.status(401).json({ error: 'Invalid or expired token' });

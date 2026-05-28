@@ -1,4 +1,4 @@
-# AFRIXORA™ — Global IoT Intelligence Platform
+# AFRIXORA — Global IoT Intelligence Platform
 
 **NAZGENIX SAS** — Lubumbashi, République Démocratique du Congo
 https://afrixora.cd

@@ -63,6 +63,9 @@ const DevicesPage = () => {
   const [zones, setZones] = useState<Zone[]>([]);
 
   const updateDevice = useStore(state => state.updateDevice);
+  const user = useStore(state => state.user);
+  const canEdit = user && ['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN'].includes(user.role);
+  const canControl = user && user.role !== 'VIEWER';
 
   useEffect(() => {
     (async () => {
@@ -164,11 +167,11 @@ const DevicesPage = () => {
         </div>
         {selectedIds.size > 0 && (
           <div className="flex gap-1">
-            <Button variant="outline" size="sm" onClick={() => bulkToggle(true)}>Allumer</Button>
-            <Button variant="outline" size="sm" onClick={() => bulkToggle(false)}>Éteindre</Button>
+            <Button variant="outline" size="sm" onClick={() => bulkToggle(true)}>Allumer</Button>}
+            <Button variant="outline" size="sm" onClick={() => bulkToggle(false)}>Éteindre</Button>}
           </div>
         )}
-        <Button className="ml-auto bg-emerald-600 hover:bg-emerald-700" onClick={() => setShowAddDialog(true)}>+ Ajouter</Button>
+        {canEdit && <Button className="ml-auto bg-emerald-600 hover:bg-emerald-700" onClick={() => setShowAddDialog(true)}>+ Ajouter</Button>}
       </div>
 
       {/* Stats Bar */}
@@ -217,7 +220,7 @@ const DevicesPage = () => {
                   <td className="p-3"><Switch checked={d.config?.state === 'on' || d.config?.power === 'on'} onCheckedChange={checked => toggleDevice(d.id, checked)} onClick={e => e.stopPropagation()} /></td>
                   <td className="p-3">
                     <div className="flex gap-1 opacity-0 hover:opacity-100 transition-opacity">
-                      <Button variant="ghost" size="icon" onClick={e => { e.stopPropagation(); setDrawerDevice(d); }}>⋯</Button>
+                      <Button variant="ghost" size="icon" onClick={e => { e.stopPropagation(); setDrawerDevice(d); }}>⋯</Button>}
                     </div>
                   </td>
                 </tr>
@@ -247,7 +250,7 @@ const DevicesPage = () => {
           <div className="absolute right-0 top-0 h-full w-80 bg-card border-l shadow-xl p-4 overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold">{drawerDevice.name}</h3>
-              <Button variant="ghost" size="icon" onClick={() => setDrawerDevice(null)}>✕</Button>
+              <Button variant="ghost" size="icon" onClick={() => setDrawerDevice(null)}>✕</Button>}
             </div>
             <div className="space-y-3 text-sm">
               <div><span className="text-muted-foreground">Type</span> <span className="float-right">{TYPE_LABELS[drawerDevice.type]}</span></div>
@@ -329,8 +332,8 @@ const AddDeviceDialog = ({ open, onOpenChange, buildings, zones, selectedBuildin
           </select>
         </div>
         <div className="flex justify-end gap-2 mt-4">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Annuler</Button>
-          <Button onClick={handleSubmit} disabled={loading || !name || !selectedBuildingId}>{loading ? "..." : "Créer"}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Annuler</Button>}
+          <Button onClick={handleSubmit} disabled={loading || !name || !selectedBuildingId}>{loading ? "..." : "Créer"}</Button>}
         </div>
       </div>
     </div>

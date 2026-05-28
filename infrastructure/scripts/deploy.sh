@@ -1,5 +1,5 @@
 #!/bin/bash
-# AFRIXORA™ Deployment Script
+# AFRIXORA Deployment Script
 # This script automates the deployment process for the AFRIXORA platform
 # It checks prerequisites, pulls latest code, builds containers, runs migrations, and starts services
 
@@ -13,7 +13,7 @@ RED="\033[0;31m"
 NC="\033[0m" # No Color
 
 # Print header
-echo -e "${BOLD}AFRIXORA™ Deployment Script${NC}"
+echo -e "${BOLD}AFRIXORA Deployment Script${NC}"
 echo -e "© 2026 NAZGENIX SAS — Lubumbashi, RDC"
 echo "----------------------------------------"
 
@@ -123,7 +123,7 @@ echo -e "${GREEN}✓ All services started${NC}"
 echo -e "\n${BOLD}Checking service status...${NC}"
 docker compose ps
 
-echo -e "\n${GREEN}${BOLD}AFRIXORA™ deployment completed successfully!${NC}"
+echo -e "\n${GREEN}${BOLD}AFRIXORA deployment completed successfully!${NC}"
 echo -e "Access the platform at: https://${DOMAIN}"
 echo -e "Grafana dashboard: https://grafana.${DOMAIN}"
 echo -e "API endpoint: https://api.${DOMAIN}"

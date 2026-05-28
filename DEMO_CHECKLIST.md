@@ -1,4 +1,4 @@
-# AFRIXORA™ — Checklist Démonstration Client
+# AFRIXORA — Checklist Démonstration Client
 
 ## Avant la démo (vérifier chaque point)
 

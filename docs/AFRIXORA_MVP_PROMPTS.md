@@ -1,6 +1,6 @@
 # AFRIXORA_MVP_PROMPTS.md — Guide Opérationnel MVP
 
-> Ce document contient la suite complète des prompts à envoyer à Claude Code pour développer le MVP AFRIXORA™ étape par étape.
+> Ce document contient la suite complète des prompts à envoyer à Claude Code pour développer le MVP AFRIXORA étape par étape.
 > Chaque phase doit être complétée et validée avant de passer à la suivante.
 > Ne jamais envoyer plusieurs phases en même temps.
 
@@ -16,7 +16,7 @@
 
 ## PHASE 1 — Initialisation du projet
 
-**Objectif :** Créer l'arborescence monorepo de base du projet AFRIXORA™.
+**Objectif :** Créer l'arborescence monorepo de base du projet AFRIXORA.
 
 **Ce que Claude Code doit produire :**
 - Structure complète des dossiers racine
@@ -36,7 +36,7 @@ Lis entièrement les fichiers suivants avant de faire quoi que ce soit :
 - docs/AFRIXORA_CONTEXT.md
 - docs/AFRIXORA_RULES.md
 
-Tu travailles sur le projet AFRIXORA™ développé par NAZGENIX SAS.
+Tu travailles sur le projet AFRIXORA développé par NAZGENIX SAS.
 Ce projet est développé et maintenu par un seul développeur.
 N'implémente que ce qui est demandé dans cette phase. Ne génère pas de code pour les phases suivantes.
 
@@ -102,7 +102,7 @@ Lis entièrement les fichiers suivants avant de faire quoi que ce soit :
 - docs/AFRIXORA_CONTEXT.md
 - docs/AFRIXORA_RULES.md
 
-Tu travailles sur le projet AFRIXORA™ développé par NAZGENIX SAS.
+Tu travailles sur le projet AFRIXORA développé par NAZGENIX SAS.
 Ce projet est développé et maintenu par un seul développeur.
 N'implémente que ce qui est demandé dans cette phase. Ne génère pas de code pour les phases suivantes.
 
@@ -171,7 +171,7 @@ Lis entièrement les fichiers suivants avant de faire quoi que ce soit :
 - docs/AFRIXORA_CONTEXT.md
 - docs/AFRIXORA_RULES.md
 
-Tu travailles sur le projet AFRIXORA™ développé par NAZGENIX SAS.
+Tu travailles sur le projet AFRIXORA développé par NAZGENIX SAS.
 Ce projet est développé et maintenu par un seul développeur.
 N'implémente que ce qui est demandé dans cette phase. Ne génère pas de code pour les phases suivantes.
 
@@ -238,7 +238,7 @@ Lis entièrement les fichiers suivants avant de faire quoi que ce soit :
 - docs/AFRIXORA_CONTEXT.md
 - docs/AFRIXORA_RULES.md
 
-Tu travailles sur le projet AFRIXORA™ développé par NAZGENIX SAS.
+Tu travailles sur le projet AFRIXORA développé par NAZGENIX SAS.
 Ce projet est développé et maintenu par un seul développeur.
 N'implémente que ce qui est demandé dans cette phase. Ne génère pas de code pour les phases suivantes.
 
@@ -309,7 +309,7 @@ Lis entièrement les fichiers suivants avant de faire quoi que ce soit :
 - docs/AFRIXORA_CONTEXT.md
 - docs/AFRIXORA_RULES.md
 
-Tu travailles sur le projet AFRIXORA™ développé par NAZGENIX SAS.
+Tu travailles sur le projet AFRIXORA développé par NAZGENIX SAS.
 Ce projet est développé et maintenu par un seul développeur.
 N'implémente que ce qui est demandé dans cette phase. Ne génère pas de code pour les phases suivantes.
 
@@ -373,7 +373,7 @@ Lis entièrement les fichiers suivants avant de faire quoi que ce soit :
 - docs/AFRIXORA_CONTEXT.md
 - docs/AFRIXORA_RULES.md
 
-Tu travailles sur le projet AFRIXORA™ développé par NAZGENIX SAS.
+Tu travailles sur le projet AFRIXORA développé par NAZGENIX SAS.
 Ce projet est développé et maintenu par un seul développeur.
 N'implémente que ce qui est demandé dans cette phase. Ne génère pas de code pour les phases suivantes.
 
@@ -448,7 +448,7 @@ Lis entièrement les fichiers suivants avant de faire quoi que ce soit :
 - docs/AFRIXORA_CONTEXT.md
 - docs/AFRIXORA_RULES.md
 
-Tu travailles sur le projet AFRIXORA™ développé par NAZGENIX SAS.
+Tu travailles sur le projet AFRIXORA développé par NAZGENIX SAS.
 Ce projet est développé et maintenu par un seul développeur.
 N'implémente que ce qui est demandé dans cette phase. Ne génère pas de code pour les phases suivantes.
 
@@ -516,7 +516,7 @@ Lis entièrement les fichiers suivants avant de faire quoi que ce soit :
 - docs/AFRIXORA_CONTEXT.md
 - docs/AFRIXORA_RULES.md
 
-Tu travailles sur le projet AFRIXORA™ développé par NAZGENIX SAS.
+Tu travailles sur le projet AFRIXORA développé par NAZGENIX SAS.
 Ce projet est développé et maintenu par un seul développeur.
 N'implémente que ce qui est demandé dans cette phase. Ne génère pas de code pour les phases suivantes.
 
@@ -588,7 +588,7 @@ Lis entièrement les fichiers suivants avant de faire quoi que ce soit :
 - docs/AFRIXORA_CONTEXT.md
 - docs/AFRIXORA_RULES.md
 
-Tu travailles sur le projet AFRIXORA™ développé par NAZGENIX SAS.
+Tu travailles sur le projet AFRIXORA développé par NAZGENIX SAS.
 Ce projet est développé et maintenu par un seul développeur.
 N'implémente que ce qui est demandé dans cette phase. Ne génère pas de code pour les phases suivantes.
 
@@ -670,7 +670,7 @@ Lis entièrement les fichiers suivants avant de faire quoi que ce soit :
 - docs/AFRIXORA_CONTEXT.md
 - docs/AFRIXORA_RULES.md
 
-Tu travailles sur le projet AFRIXORA™ développé par NAZGENIX SAS.
+Tu travailles sur le projet AFRIXORA développé par NAZGENIX SAS.
 Ce projet est développé et maintenu par un seul développeur.
 N'implémente que ce qui est demandé dans cette phase. Ne génère pas de code pour les phases suivantes.
 
@@ -738,7 +738,7 @@ Lis entièrement les fichiers suivants avant de faire quoi que ce soit :
 - docs/AFRIXORA_CONTEXT.md
 - docs/AFRIXORA_RULES.md
 
-Tu travailles sur le projet AFRIXORA™ développé par NAZGENIX SAS.
+Tu travailles sur le projet AFRIXORA développé par NAZGENIX SAS.
 Ce projet est développé et maintenu par un seul développeur.
 N'implémente que ce qui est demandé dans cette phase. Ne génère pas de code pour les phases suivantes.
 
@@ -805,7 +805,7 @@ Lis entièrement les fichiers suivants avant de faire quoi que ce soit :
 - docs/AFRIXORA_CONTEXT.md
 - docs/AFRIXORA_RULES.md
 
-Tu travailles sur le projet AFRIXORA™ développé par NAZGENIX SAS.
+Tu travailles sur le projet AFRIXORA développé par NAZGENIX SAS.
 Ce projet est développé et maintenu par un seul développeur.
 N'implémente que ce qui est demandé dans cette phase. Ne génère pas de code pour les phases suivantes.
 
@@ -867,7 +867,7 @@ Fournir un exemple de test : simuler un message MQTT et vérifier la mise à jou
 **Critères de validation :**
 - [ ] `GET /api/v1/reports/csv?buildingId=X&from=...&to=...` retourne un fichier `.csv` téléchargeable
 - [ ] `GET /api/v1/reports/pdf?buildingId=X&period=30d` retourne un PDF avec les KPIs
-- [ ] Le PDF contient : en-tête AFRIXORA™, période, KPIs, tableau de consommation par appareil
+- [ ] Le PDF contient : en-tête AFRIXORA, période, KPIs, tableau de consommation par appareil
 
 ---
 
@@ -876,7 +876,7 @@ Lis entièrement les fichiers suivants avant de faire quoi que ce soit :
 - docs/AFRIXORA_CONTEXT.md
 - docs/AFRIXORA_RULES.md
 
-Tu travailles sur le projet AFRIXORA™ développé par NAZGENIX SAS.
+Tu travailles sur le projet AFRIXORA développé par NAZGENIX SAS.
 Ce projet est développé et maintenu par un seul développeur.
 N'implémente que ce qui est demandé dans cette phase. Ne génère pas de code pour les phases suivantes.
 
@@ -892,7 +892,7 @@ Produis exactement :
      → Retourner un stream ou string CSV avec colonnes : timestamp, device_name, metric, value, unit
    - generatePDF(tenantId, buildingId, period) :
      → Utiliser pdfkit (déjà dans les dépendances)
-     → En-tête : logo texte AFRIXORA™ + nom du bâtiment + période
+     → En-tête : logo texte AFRIXORA + nom du bâtiment + période
      → Section KPIs : totalKwh, coût estimé, peak power (depuis energyService.getSummary)
      → Tableau breakdown par appareil (depuis energyService.getByDevice)
      → Pied de page : date de génération + NAZGENIX SAS
@@ -945,7 +945,7 @@ Lis entièrement les fichiers suivants avant de faire quoi que ce soit :
 - docs/AFRIXORA_CONTEXT.md
 - docs/AFRIXORA_RULES.md
 
-Tu travailles sur le projet AFRIXORA™ développé par NAZGENIX SAS.
+Tu travailles sur le projet AFRIXORA développé par NAZGENIX SAS.
 Ce projet est développé et maintenu par un seul développeur.
 N'implémente que ce qui est demandé dans cette phase. C'est la dernière phase du MVP.
 
@@ -1078,5 +1078,5 @@ Ajoute ce bloc à la fin de ton fichier `AFRIXORA_MVP_PROMPTS.md` existant :
 - [ ] Message d'erreur si email déjà existant
 ---
 
-*AFRIXORA™ — © 2026 NAZGENIX SAS · afrixora.cd · Lubumbashi, RDC*
+*AFRIXORA — © 2026 NAZGENIX SAS · afrixora.cd · Lubumbashi, RDC*
 *Ce fichier est à conserver dans docs/ aux côtés de AFRIXORA_CONTEXT.md et AFRIXORA_RULES.md.*

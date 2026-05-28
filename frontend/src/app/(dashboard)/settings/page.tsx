@@ -147,7 +147,7 @@ const SettingsPage = (): JSX.Element => {
         <TabsContent value="about" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>AFRIXORA™</CardTitle>
+              <CardTitle>AFRIXORA</CardTitle>
               <CardDescription>Global IoT Intelligence Platform</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">

@@ -95,7 +95,7 @@ export const generatePDF = async (
     doc.on('data', (chunk: Buffer) => buffers.push(chunk));
 
     // Header
-    doc.fontSize(25).text('AFRIXORA™', { align: 'center' });
+    doc.fontSize(25).text('AFRIXORA', { align: 'center' });
     doc.fontSize(18).text('Rapport de consommation énergétique', { align: 'center' });
     doc.moveDown();
     doc.fontSize(12).text(`Bâtiment : ${building.name}`);
@@ -141,7 +141,7 @@ export const generatePDF = async (
 
     // Footer
     doc.fontSize(9).text(
-      '© 2026 NAZGENIX SAS — AFRIXORA™ Intelligent Connected Systems — afrixora.cd',
+      '© 2026 NAZGENIX SAS — AFRIXORA Intelligent Connected Systems — afrixora.cd',
       { align: 'center' }
     );
 

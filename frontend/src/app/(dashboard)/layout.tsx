@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  LayoutDashboard, Building2, Cpu, Zap, Workflow, Bell, FileText, Menu, Users, Settings, X
+  Home, Building2, Cpu, Zap, Workflow, Bell, FileText, Menu, Users, Settings, X, Globe, Briefcase
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { isAuthenticated, clearToken, redirectToLogin, getToken } from "@/lib/auth";
@@ -25,14 +25,12 @@ const DashboardLayout = ({
   const role = user?.role || "VIEWER";
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Vérification auth
   useEffect(() => {
     if (!isAuthenticated()) {
       redirectToLogin();
     }
   }, []);
 
-  // Restaurer le profil utilisateur complet
   useEffect(() => {
     const token = getToken();
     if (token && !user?.email) {
@@ -55,11 +53,12 @@ const DashboardLayout = ({
   const closeMobileMenu = () => setMobileMenuOpen(false);
 
   const baseNav = [
-    { href: "/", label: "Dashboard", icon: <LayoutDashboard className="h-5 w-5" /> },
+    { href: "/", label: "Dashboard", icon: <Home className="h-5 w-5" /> },
     { href: "/buildings", label: "Buildings", icon: <Building2 className="h-5 w-5" /> },
     { href: "/devices", label: "Devices", icon: <Cpu className="h-5 w-5" /> },
     { href: "/energy", label: "Energy", icon: <Zap className="h-5 w-5" /> },
     { href: "/reports", label: "Reports", icon: <FileText className="h-5 w-5" /> },
+    { href: "/settings", label: "Paramètres", icon: <Settings className="h-5 w-5" /> },
   ];
 
   const adminNav = [
@@ -70,6 +69,10 @@ const DashboardLayout = ({
   ];
 
   const isAdmin = ["SUPER_ADMIN", "TENANT_ADMIN"].includes(role);
+// Ajouter Tenants uniquement pour SUPER_ADMIN
+  if (role === "SUPER_ADMIN") {
+    adminNav.unshift({ href: "/tenants", label: "Tenants", icon: <Briefcase className="h-5 w-5" /> });
+  }
   const navItems = isAdmin ? [...baseNav, ...adminNav] : baseNav;
 
   const sidebarContent = (

@@ -5,6 +5,7 @@ import { Switch } from "@/components/ui/switch";
 import type { Device } from "@/types";
 
 interface DeviceTableProps {
+  canControl?: boolean;
   devices: Device[];
   selectedIds: Set<string>;
   setSelectedIds: (ids: Set<string>) => void;
@@ -12,7 +13,7 @@ interface DeviceTableProps {
   onDeviceClick: (device: Device) => void;
 }
 
-const DeviceTable: React.FC<DeviceTableProps> = ({ devices, selectedIds, setSelectedIds, toggleDevice, onDeviceClick }) => {
+const DeviceTable: React.FC<DeviceTableProps> = ({ devices, selectedIds, setSelectedIds, toggleDevice, onDeviceClick }, canControl}) => {
   const toggleSelectAll = () => {
     if (selectedIds.size === devices.length) setSelectedIds(new Set());
     else setSelectedIds(new Set(devices.map(d => d.id)));

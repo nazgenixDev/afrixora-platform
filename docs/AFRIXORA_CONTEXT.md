@@ -1,4 +1,4 @@
-# AFRIXORA™ — Technical Context for AI-Assisted Development
+# AFRIXORA — Technical Context for AI-Assisted Development
 
 > **READ THIS FILE FIRST** before generating any code for the AFRIXORA project.
 > This is the single source of truth for the MVP architecture and development rules.
@@ -8,7 +8,7 @@
 
 ## 1. Project Overview
 
-**Product:** AFRIXORA™ — Global IoT Intelligence Platform
+**Product:** AFRIXORA — Global IoT Intelligence Platform
 **Company:** NAZGENIX SAS — Lubumbashi, République Démocratique du Congo
 **Website:** afrixora.cd · admin@afrixora.cd
 **Version:** MVP Phase 1 — **COMPLETED**

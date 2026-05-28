@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "🚀 Démarrage de la démo AFRIXORA™..."
+echo "🚀 Démarrage de la démo AFRIXORA..."
 
 # Vérifier Docker
 if ! docker ps &>/dev/null; then
@@ -35,7 +35,7 @@ cd ~/afrixora-platform/frontend && npm run dev &
 FRONTEND_PID=$!
 
 echo ""
-echo "✅ Démo AFRIXORA™ prête !"
+echo "✅ Démo AFRIXORA prête !"
 echo "🔗 Frontend : http://localhost:3000"
 echo "🔗 Backend  : http://localhost:4000/health"
 echo "👤 Login    : admin@afrixora.cd / Admin123!"

@@ -1,4 +1,6 @@
 "use client";
+import SuperAdminDashboard from "@/components/dashboard/SuperAdminDashboard";
+import useStore from "@/store";
 
 import { useEffect, useState, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -136,6 +138,23 @@ const DashboardPage = () => {
         </div>
       </div>
     );
+  }
+
+
+  const user = useStore(state => state.user);
+  const impersonatedTenantId = useStore(state => state.impersonatedTenantId);
+  const [showSuperAdmin, setShowSuperAdmin] = useState(false);
+
+  useEffect(() => {
+    if (user?.role === "SUPER_ADMIN" && !impersonatedTenantId) {
+      setShowSuperAdmin(true);
+    } else {
+      setShowSuperAdmin(false);
+    }
+  }, [user, impersonatedTenantId]);
+
+  if (showSuperAdmin) {
+    return <SuperAdminDashboard />;
   }
 
   if (data.isLoading) {

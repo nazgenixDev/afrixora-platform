@@ -4,7 +4,7 @@
 ## 2. AFRIXORA_RULES.md (Version 2.0)
 
 ```markdown
-# CLAUDE_RULES.md — AFRIXORA™ Development Rules for Claude Code
+# CLAUDE_RULES.md — AFRIXORA Development Rules for Claude Code
 
 > These rules are **mandatory** and apply to every code generation task on this project.
 > Non-compliance breaks the architecture and increases maintenance cost for a solo developer.

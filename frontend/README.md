@@ -1,6 +1,6 @@
-# AFRIXORA™ Frontend
+# AFRIXORA Frontend
 
-Frontend dashboard for the AFRIXORA™ Global IoT Intelligence Platform.
+Frontend dashboard for the AFRIXORA Global IoT Intelligence Platform.
 
 ## Technologies
 
