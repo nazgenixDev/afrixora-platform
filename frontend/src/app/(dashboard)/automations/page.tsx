@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import api from "@/lib/api";
+import logger from "@/lib/logger";
 import useStore from "@/store";
 
 interface Automation {
@@ -73,12 +74,12 @@ const AutomationsPage = () => {
           api.get("/api/v1/buildings"),
           api.get("/api/v1/devices"),
         ]);
-        setAutomations(aRes.data || []);
-        setBuildings(bRes.data || []);
-        setSelectedDevices(dRes.data || []);
+        setAutomations(Array.isArray(aRes.data) ? aRes.data : (aRes.data?.data ?? []));
+        setBuildings(Array.isArray(bRes.data) ? bRes.data : (bRes.data?.data ?? []));
+        setSelectedDevices(Array.isArray(dRes.data) ? dRes.data : (dRes.data?.data ?? []));
         setIsLoading(false);
       } catch (err) {
-        console.error(err);
+        logger.error(String(err));
         setIsLoading(false);
       }
     })();
@@ -91,7 +92,7 @@ const AutomationsPage = () => {
         prev.map(a => (a.id === id ? { ...a, isActive } : a))
       );
     } catch (err) {
-      console.error(err);
+      logger.error(String(err));
     }
   };
 
@@ -101,7 +102,7 @@ const AutomationsPage = () => {
       setAutomations(prev => prev.filter(a => a.id !== id));
       if (selectedAutomation?.id === id) setSelectedAutomation(null);
     } catch (err) {
-      console.error(err);
+      logger.error(String(err));
     }
   };
 
@@ -137,7 +138,7 @@ const AutomationsPage = () => {
       setShowNewRule(false);
       resetForm();
     } catch (err) {
-      console.error(err);
+      logger.error(String(err));
     }
   };
 

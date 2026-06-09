@@ -7,8 +7,7 @@ import {
   Home, Building2, Cpu, Zap, Workflow, Bell, FileText, Menu, Users, Settings, X, Globe, Briefcase
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { isAuthenticated, clearToken, redirectToLogin, getToken } from "@/lib/auth";
-import { decodeJwtPayload } from "@/lib/jwt";
+import { redirectToLogin } from "@/lib/auth";
 import api from "@/lib/api";
 import useStore from "@/store";
 import NotificationBell from "@/components/layout/NotificationBell";
@@ -22,32 +21,23 @@ const DashboardLayout = ({
 }): JSX.Element => {
   const router = useRouter();
   const user = useStore((state) => state.user);
+  const setAuth = useStore((state) => state.setAuth);
   const role = user?.role || "VIEWER";
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
-    if (!isAuthenticated()) {
-      redirectToLogin();
-    }
-  }, []);
-
-  useEffect(() => {
-    const token = getToken();
-    if (token && !user?.email) {
-      api.get("/api/v1/users/me")
-        .then(res => {
-          useStore.getState().setAuth(res.data, token);
-        })
-        .catch(() => {});
-    } else if (token && !user) {
-      const payload = decodeJwtPayload(token);
-      if (payload && payload.role && payload.userId && payload.tenantId) {
-        useStore.getState().setAuth(
-          { id: payload.userId, email: "", name: "", role: payload.role, tenantId: payload.tenantId } as any,
-          token
-        );
-      }
-    }
+    // Vérifier l'authentification via /api/v1/auth/me (cookie httpOnly)
+    api.get("/api/v1/auth/me")
+      .then(res => {
+        const { user: userData } = res.data;
+        if (userData && !user) {
+          setAuth(userData, null);
+        }
+      })
+      .catch(() => {
+        // 401 → pas connecté
+        redirectToLogin();
+      });
   }, []);
 
   const closeMobileMenu = () => setMobileMenuOpen(false);

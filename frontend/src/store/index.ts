@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { getToken, setToken, clearToken } from '@/lib/auth';
 
 export type User = {
   id: string;
@@ -59,7 +58,7 @@ interface AuthState {
   user: User | null;
   token: string | null;
   impersonatedTenantId: string | null;
-  setAuth: (user: User, token: string) => void;
+  setAuth: (user: User | null, token: string | null) => void;
   clearAuth: () => void;
   setImpersonatedTenantId: (tenantId: string | null) => void;
 }
@@ -72,16 +71,20 @@ const getSavedImpersonatedTenantId = (): string | null => {
   return null;
 };
 
-const createAuthSlice = (set: any) => ({
+type StoreSetter = (
+  partial: Partial<StoreState> | ((state: StoreState) => Partial<StoreState>),
+  replace?: boolean
+) => void;
+
+const createAuthSlice = (set: StoreSetter) => ({
   user: null,
-  token: getToken(),
+  token: null, // plus de localStorage pour le token (httpOnly cookie)
   impersonatedTenantId: getSavedImpersonatedTenantId(),
-  setAuth: (user: User, token: string) => {
-    setToken(token);
+  setAuth: (user: User | null, token: string | null) => {
+    // token n'est plus stocké dans localStorage (httpOnly cookie)
     set({ user, token });
   },
   clearAuth: () => {
-    clearToken();
     localStorage.removeItem('afrixora_impersonated_tenant_id');
     set({ user: null, token: null, impersonatedTenantId: null });
   },
@@ -102,7 +105,7 @@ interface DevicesState {
   updateDevice: (id: string, data: Partial<Device>) => void;
 }
 
-const createDevicesSlice = (set: any) => ({
+const createDevicesSlice = (set: StoreSetter) => ({
   devices: {} as Record<string, Device>,
   updateDevice: (id: string, data: Partial<Device>) => {
     set((state: DevicesState) => ({
@@ -118,7 +121,7 @@ interface ReadingsState {
   setReading: (deviceId: string, metrics: Record<string, number>, units?: Record<string, string>) => void;
 }
 
-const createReadingsSlice = (set: any) => ({
+const createReadingsSlice = (set: StoreSetter) => ({
   readings: {} as Record<string, Reading[]>,
   setReading: (deviceId: string, metrics: Record<string, number>, units?: Record<string, string>) => {
     const time = new Date().toISOString();
@@ -140,7 +143,7 @@ interface AlertsState {
   addAlert: (alert: Alert) => void;
 }
 
-const createAlertsSlice = (set: any) => ({
+const createAlertsSlice = (set: StoreSetter) => ({
   alerts: [] as Alert[],
   addAlert: (alert: Alert) => {
     set((state: AlertsState) => ({

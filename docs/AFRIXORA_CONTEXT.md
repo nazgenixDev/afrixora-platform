@@ -417,7 +417,7 @@ POST	/auth/refresh	Renew access_token
 POST	/auth/logout	Invalidate token (jwtVersion++)
 Buildings & Zones
 Method	Endpoint	Description
-GET	/buildings	List tenant buildings
+GET	/buildings	List tenant buildings (paginated: ?page=1&limit=50, returns { data, total, page, totalPages })
 POST	/buildings	Create building
 GET	/buildings/:id	Building detail + zones + stats
 PATCH	/buildings/:id	Update building
@@ -435,7 +435,7 @@ POST	/devices/:id/control	Send MQTT command
 GET	/devices/:id/history	State history
 Energy & Readings
 Method	Endpoint	Description
-GET	/readings	Time-series query
+GET	/readings	Time-series query (paginated: ?page=1&limit=100)
 GET	/energy/consumption	Aggregated consumption
 GET	/energy/by-device	Breakdown by device
 GET	/energy/by-zone	Breakdown by zone
@@ -455,7 +455,7 @@ GET	/reports/pdf	Monthly PDF report
 User Management (NEW)
 Method	Endpoint	Description
 GET	/users/me	Get current user profile
-GET	/users	List all users (admin)
+GET	/users	List all users (paginated: ?page=1&limit=50, returns { data, total, page, totalPages })
 POST	/users	Create user (admin)
 PATCH	/users/:id/toggle	Toggle active status
 PATCH	/users/:id/role	Change user role
@@ -509,12 +509,19 @@ components/
 
 Real-time architecture
 
-// Socket.IO rooms: client joins `building:{buildingId}` room
+// Socket.IO rooms: client joins `building:{buildingId}` room via `join:building` event
 // Events received:
-//   device:reading   → { deviceId, metrics, timestamp }
-//   device:status    → { deviceId, isOnline }
-//   alert:new        → Alert object
-//   automation:fired → { ruleId, ruleName }
+//   device:reading    → { deviceId, metrics, timestamp }
+//   device:event      → { deviceId, ...payload }
+//   alert:new         → Alert object
+//   automation:fired  → { ruleId, ruleName }
+
+// Client connection (useSocket.ts):
+//   socketInstance.emit('join:building', buildingId)
+//   socketInstance.on('device:reading', ...)
+//   socketInstance.on('device:event', ...)
+//   socketInstance.on('alert:new', ...)
+//   socketInstance.on('automation:fired', ...)
 
 // Zustand store holds:
 //   auth: { user, token, setAuth, clearAuth }
@@ -538,10 +545,20 @@ Non-admin roles see: Dashboard, Buildings, Devices, Energy, Reports, Settings
 
 Settings page available to all authenticated users
 
-JWT Restoration
-On page reload, user profile is restored from JWT payload (userId, tenantId, role)
+Authentication Strategy (Updated after audit — June 2026)
 
-If JWT lacks email/name, an API call to /users/me fetches the complete profile
+Production : token JWT stocké dans cookie httpOnly (`access_token`, 15 min).
+Le backend pose le cookie via `res.cookie()` avec `httpOnly: true, secure: true, sameSite: 'lax'`.
+
+Développement cross-port (localhost:3000 → localhost:4000) : le navigateur bloque le cookie SameSite.
+Fallback temporaire : le backend renvoie aussi `accessToken` dans le JSON de login.
+Le frontend stocke ce token dans `localStorage` et l'envoie en header `Authorization: Bearer <token>`.
+
+JWT Restoration
+On page reload, user profile is restored either from httpOnly cookie (production) or localStorage token (development).
+The middleware `authenticate.ts` checks both sources: cookie first, then Authorization header.
+
+If JWT lacks email/name, an API call to /users/me fetches the complete profile.
 
 9. Development Workflow (Completed)
 Step	Phase	Status

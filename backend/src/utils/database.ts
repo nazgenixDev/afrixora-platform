@@ -10,6 +10,6 @@ if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
-export const query = (text: string, params?: any[]) => pool.query(text, params);
+export const query = (text: string, params?: unknown[]) => pool.query(text, params);
 
 export default prisma;

@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import Link from "next/link";
 import api from "@/lib/api";
 import useStore from "@/store";
+import logger from "@/lib/logger";
 
 interface Building {
   id: string; name: string; address: string; city: string; unitsCount: number; isActive: boolean; _count?: { zones: number; devices: number };
@@ -25,12 +26,12 @@ const BuildingsPage = (): JSX.Element => {
   const [deleteTarget, setDeleteTarget] = useState<Building | null>(null);
   const [formName, setFormName] = useState(""); const [formAddress, setFormAddress] = useState(""); const [formCity, setFormCity] = useState("Lubumbashi"); const [formUnits, setFormUnits] = useState(0);
 
-  const fetchBuildings = async () => { try { setIsLoading(true); const response = await api.get('/api/v1/buildings'); setBuildings(response.data); setError(null); } catch (err) { setError('Failed to load buildings.'); } finally { setIsLoading(false); } };
+  const fetchBuildings = async () => { try { setIsLoading(true); const response = await api.get('/api/v1/buildings'); const raw = response.data; setBuildings(Array.isArray(raw) ? raw : (raw?.data ?? [])); setError(null); } catch (err) { setError('Failed to load buildings.'); } finally { setIsLoading(false); } };
   useEffect(() => { fetchBuildings(); }, []);
 
-  const handleAdd = async () => { if (!formName || !formAddress) return; try { await api.post('/api/v1/buildings', { name: formName, address: formAddress, city: formCity, unitsCount: formUnits || 0 }); setShowAdd(false); setFormName(""); setFormAddress(""); setFormCity("Lubumbashi"); setFormUnits(0); fetchBuildings(); } catch (err) { console.error(err); } };
+  const handleAdd = async () => { if (!formName || !formAddress) return; try { await api.post('/api/v1/buildings', { name: formName, address: formAddress, city: formCity, unitsCount: formUnits || 0 }); setShowAdd(false); setFormName(""); setFormAddress(""); setFormCity("Lubumbashi"); setFormUnits(0); fetchBuildings(); } catch (err) { logger.error("Erreur ajout bâtiment", err); } };
 
-  const handleDelete = async () => { if (!deleteTarget) return; try { await api.delete(`/api/v1/buildings/${deleteTarget.id}`); setBuildings(prev => prev.filter(b => b.id !== deleteTarget.id)); setDeleteTarget(null); } catch (err) { console.error(err); } };
+  const handleDelete = async () => { if (!deleteTarget) return; try { await api.delete(`/api/v1/buildings/${deleteTarget.id}`); setBuildings(prev => prev.filter(b => b.id !== deleteTarget.id)); setDeleteTarget(null); } catch (err) { logger.error("Erreur suppression bâtiment", err); } };
 
   if (isLoading) return <div className="flex items-center justify-center h-64 text-muted-foreground">Chargement...</div>;
   if (error) return <div className="p-6 bg-red-50 border border-red-200 rounded-md"><h2 className="text-lg font-semibold text-red-700">Erreur</h2><p className="text-red-600">{error}</p></div>;

@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import api from "@/lib/api";
+import logger from "@/lib/logger";
 import useStore from "@/store";
 
 interface Tenant {
@@ -27,7 +28,7 @@ const TenantsPage = (): JSX.Element => {
   const [createError, setCreateError] = useState<string | null>(null);
 
   const fetchTenants = async () => {
-    try { const res = await api.get("/api/v1/tenants"); setTenants(res.data || []); } catch (err) { console.error(err); } finally { setLoading(false); }
+    try { const res = await api.get("/api/v1/tenants"); const raw = res.data; setTenants(Array.isArray(raw) ? raw : (raw?.data ?? [])); } catch (err) { logger.error(String(err)); } finally { setLoading(false); }
   };
   useEffect(() => { fetchTenants(); }, []);
 
@@ -38,14 +39,14 @@ const TenantsPage = (): JSX.Element => {
   };
 
   const toggleStatus = async (id: string, isActive: boolean) => {
-    try { await api.patch(`/api/v1/tenants/${id}`, { isActive: !isActive }); setTenants(prev => prev.map(t => (t.id === id ? { ...t, isActive: !isActive } : t))); } catch (err) { console.error(err); }
+    try { await api.patch(`/api/v1/tenants/${id}`, { isActive: !isActive }); setTenants(prev => prev.map(t => (t.id === id ? { ...t, isActive: !isActive } : t))); } catch (err) { logger.error(String(err)); }
   };
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
     setDeleteLoading(true);
     try { await api.delete(`/api/v1/tenants/${deleteTarget.id}`); setTenants(prev => prev.filter(t => t.id !== deleteTarget.id)); setDeleteTarget(null); }
-    catch (err) { console.error(err); } finally { setDeleteLoading(false); }
+    catch (err) { logger.error(String(err)); } finally { setDeleteLoading(false); }
   };
 
   if (!user || user.role !== "SUPER_ADMIN") return <div className="flex items-center justify-center h-64"><p className="text-muted-foreground">Accès réservé au Super Administrateur</p></div>;

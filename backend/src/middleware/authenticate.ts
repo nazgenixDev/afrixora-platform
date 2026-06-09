@@ -1,9 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../utils/database';
 import logger from '../utils/logger';
-
-const prisma = new PrismaClient();
 
 interface TokenPayload {
   userId: string;
@@ -26,18 +24,28 @@ declare global {
 
 export const authenticate = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Authentication required' });
+    // Lire le token depuis le cookie httpOnly (prioritaire) ou depuis l'header Authorization (fallback API key)
+    let token: string | undefined;
+
+    // 1. Essayer le cookie httpOnly
+    if (req.cookies?.access_token) {
+      token = req.cookies.access_token;
     }
 
-    const token = authHeader.split(' ')[1];
+    // 2. Fallback: header Authorization (pour les clients qui ne supportent pas les cookies)
+    if (!token) {
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.split(' ')[1];
+      }
+    }
+
     if (!token) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev_jwt_secret_change_in_production') as TokenPayload;
+      const decoded = jwt.verify(token, process.env.JWT_SECRET!) as TokenPayload;
 
       const user = await prisma.user.findUnique({
         where: { id: decoded.userId },

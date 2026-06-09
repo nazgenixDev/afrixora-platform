@@ -1,41 +1,37 @@
 /**
  * Authentication utilities for AFRIXORA frontend
+ * Token is stored in httpOnly cookie (no localStorage).
  */
 
-const TOKEN_KEY = "afrixora_access_token";
-
 /**
- * Get the authentication token from localStorage
- * @returns The token string or null if not found
+ * Get the authentication token — deprecated, token is now in httpOnly cookie.
+ * @returns null (token inaccessible from JS)
  */
 export const getToken = (): string | null => {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_KEY);
+  return null;
 };
 
 /**
- * Set the authentication token in localStorage
- * @param token The JWT token to store
+ * Set the authentication token — deprecated, token is set via httpOnly cookie by backend.
  */
-export const setToken = (token: string): void => {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(TOKEN_KEY, token);
+export const setToken = (_token: string): void => {
+  // No-op: token is in httpOnly cookie, not localStorage
 };
 
 /**
- * Clear the authentication token from localStorage
+ * Clear the authentication token — deprecated, use logout API instead.
  */
 export const clearToken = (): void => {
-  if (typeof window === "undefined") return;
-  localStorage.removeItem(TOKEN_KEY);
+  // No-op: token is in httpOnly cookie, cleared by logout API
 };
 
 /**
  * Check if the user is authenticated
- * @returns True if a token exists, false otherwise
+ * @returns true by default (relies on API returning 401)
  */
 export const isAuthenticated = (): boolean => {
-  return !!getToken();
+  // We rely on the /auth/me endpoint to determine auth status
+  return true; // will be caught by 401 interceptor
 };
 
 /**
@@ -52,4 +48,18 @@ export const redirectToLogin = (): void => {
 export const redirectToDashboard = (): void => {
   if (typeof window === "undefined") return;
   window.location.href = "/";
+};
+
+/**
+ * Call logout API and redirect
+ */
+export const logout = async (api: any): Promise<void> => {
+  try {
+    await api.post("/api/v1/auth/logout");
+  } catch {
+    // ignore errors
+  }
+  if (typeof window !== "undefined") {
+    window.location.href = "/login";
+  }
 };

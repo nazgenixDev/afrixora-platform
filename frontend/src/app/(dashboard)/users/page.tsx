@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import api from "@/lib/api";
+import logger from "@/lib/logger";
 import useStore from "@/store";
 import ChangePasswordDialog from "@/components/users/ChangePasswordDialog";
 
@@ -49,9 +50,10 @@ const UsersPage = (): JSX.Element => {
   const fetchUsers = async () => {
     try {
       const res = await api.get("/api/v1/users");
-      setUsers(res.data);
+      const raw = res.data;
+      setUsers(Array.isArray(raw) ? raw : (raw?.data ?? []));
     } catch (err) {
-      console.error(err);
+      logger.error(String(err));
     } finally {
       setLoading(false);
     }
@@ -80,7 +82,7 @@ const UsersPage = (): JSX.Element => {
       const res = await api.patch(`/api/v1/users/${id}/toggle`);
       setUsers(prev => prev.map(u => (u.id === id ? { ...u, isActive: res.data.isActive } : u)));
     } catch (err) {
-      console.error(err);
+      logger.error(String(err));
     }
   };
 
@@ -89,7 +91,7 @@ const UsersPage = (): JSX.Element => {
       await api.patch(`/api/v1/users/${id}/role`, { role });
       setUsers(prev => prev.map(u => (u.id === id ? { ...u, role } : u)));
     } catch (err) {
-      console.error(err);
+      logger.error(String(err));
     }
   };
 

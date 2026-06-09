@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import energyService from '../services/energyService';
 
@@ -11,11 +11,14 @@ const readingsQuerySchema = z.object({
   metric: z.string()
 });
 
-router.get('/', (req, res, next) => {
-  const query = readingsQuerySchema.parse(req.query);
-  energyService.getReadings(req.user!.tenantId, query.deviceId, query.from, query.to, query.metric)
-    .then(readings => res.json(readings))
-    .catch(next);
+router.get('/', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const query = readingsQuerySchema.parse(req.query);
+    const readings = await energyService.getReadings(req.user!.tenantId, query.deviceId, query.from, query.to, query.metric);
+    return res.json(readings);
+  } catch (err) {
+    next(err); return;
+  }
 });
 
 export default router;

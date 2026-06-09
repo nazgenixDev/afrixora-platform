@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import api from "@/lib/api";
+import logger from "@/lib/logger";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell
@@ -27,7 +28,7 @@ const SuperAdminDashboard = () => {
         const res = await api.get("/api/v1/admin/summary");
         setData({ ...res.data, isLoading: false });
       } catch (err) {
-        console.error(err);
+        logger.error(String(err));
         setData(prev => ({ ...prev, isLoading: false }));
       }
     })();

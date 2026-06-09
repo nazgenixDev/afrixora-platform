@@ -80,8 +80,13 @@ export const errorHandler = (
   }
 
   // Handle custom errors with status code
-  if ('statusCode' in error && typeof (error as any).statusCode === 'number') {
-    const customError = error as any;
+  interface CustomError extends Error {
+    statusCode: number;
+    code?: string;
+  }
+
+  if ('statusCode' in error && typeof (error as Error & { statusCode: unknown }).statusCode === 'number') {
+    const customError = error as CustomError;
     return res.status(customError.statusCode).json({
       error: customError.message || 'Error occurred',
       code: customError.code || 'UNKNOWN_ERROR',

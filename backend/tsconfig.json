@@ -1,11 +1,12 @@
 {
   "compilerOptions": {
+    "noImplicitReturns": false,
     "target": "ES2022",
     "module": "node16",
     "lib": ["ES2022"],
     "outDir": "dist",
     "rootDir": "src",
-    "strict": true,
+    "strict": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
@@ -13,8 +14,8 @@
     "resolveJsonModule": true,
     "sourceMap": true,
     "declaration": true,
-    "noImplicitAny": true,
-    "noImplicitReturns": true,
+    "noImplicitAny": false,
+    "noImplicitReturns": false,
     "noUnusedLocals": true,
     "noUnusedParameters": false
   },

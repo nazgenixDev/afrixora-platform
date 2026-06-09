@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import api from "@/lib/api";
+import logger from "@/lib/logger";
 
 interface ApiKey {
   id: string; name: string; key: string; scope: string; isActive: boolean;
@@ -43,7 +44,8 @@ const ApiDashboardPage = (): JSX.Element => {
 
   const fetchKeys = async () => {
     const res = await api.get("/api/v1/api-keys");
-    setKeys(res.data);
+    const raw = res.data;
+    setKeys(Array.isArray(raw) ? raw : (raw?.data ?? []));
   };
 
   const fetchLogs = async () => {
@@ -55,14 +57,14 @@ const ApiDashboardPage = (): JSX.Element => {
       const res = await api.get("/api/v1/api-logs", { params });
       setLogs(res.data.data || []);
       setLogsTotalPages(res.data.pagination?.totalPages || 1);
-    } catch (err) { console.error(err); }
+    } catch (err) { logger.error(String(err)); }
   };
 
   const fetchStats = async () => {
     try {
       const res = await api.get("/api/v1/api-logs/stats");
       setStats(res.data);
-    } catch (err) { console.error(err); }
+    } catch (err) { logger.error(String(err)); }
   };
 
   useEffect(() => { (async () => { await Promise.all([fetchKeys(), fetchLogs(), fetchStats()]); setLoading(false); })(); }, []);

@@ -15,7 +15,7 @@ router.get(
       const keys = await apiKeyService.findAll(req.user!.tenantId);
       return res.json(keys);
     } catch (err) {
-      next(err);
+      next(err); return;
     }
   }
 );
@@ -30,7 +30,7 @@ router.post(
       const key = await apiKeyService.create(req.user!.tenantId, req.body);
       return res.status(201).json(key);
     } catch (err) {
-      next(err);
+      next(err); return;
     }
   }
 );
@@ -48,7 +48,7 @@ router.patch(
       );
       return res.json(result);
     } catch (err) {
-      next(err);
+      next(err); return;
     }
   }
 );

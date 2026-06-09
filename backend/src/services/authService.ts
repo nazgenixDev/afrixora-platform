@@ -1,9 +1,7 @@
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { prisma } from '../utils/database';
 import logger from '../utils/logger';
-
-const prisma = new PrismaClient();
 
 interface TokenPayload {
   userId: string;
@@ -55,7 +53,7 @@ class AuthService {
 
   async refreshToken(refreshToken: string) {
     try {
-      const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET || 'dev_refresh_secret_change_in_production') as TokenPayload;
+      const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!) as TokenPayload;
       const user = await prisma.user.findUnique({
         where: { id: decoded.userId },
         include: { tenant: { select: { isActive: true } } },
@@ -87,12 +85,12 @@ class AuthService {
 
   private generateAccessToken(userId: string, tenantId: string, role: string, jwtVersion: number) {
     const payload: TokenPayload = { userId, tenantId, role, jwtVersion };
-    return jwt.sign(payload, process.env.JWT_SECRET || 'dev_jwt_secret_change_in_production', { expiresIn: 900 });
+    return jwt.sign(payload, process.env.JWT_SECRET!, { expiresIn: 900 });
   }
 
   private generateRefreshToken(userId: string, tenantId: string, role: string, jwtVersion: number) {
     const payload: TokenPayload = { userId, tenantId, role, jwtVersion };
-    return jwt.sign(payload, process.env.JWT_REFRESH_SECRET || 'dev_refresh_secret_change_in_production', { expiresIn: 604800 });
+    return jwt.sign(payload, process.env.JWT_REFRESH_SECRET!, { expiresIn: 604800 });
   }
 
   async hashPassword(password: string): Promise<string> {

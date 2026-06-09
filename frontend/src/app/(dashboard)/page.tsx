@@ -1,26 +1,27 @@
 "use client";
 import SuperAdminDashboard from "@/components/dashboard/SuperAdminDashboard";
 import useStore from "@/store";
-
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import api from "@/lib/api";
+import logger from "@/lib/logger";
+import type { Device, Building, Alert, EnergySummary, ConsumptionBucket, ZoneBucket } from "@/types";
 import {
   LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine
 } from "recharts";
 
 interface DashboardData {
-  energySummary: any;
+  energySummary: EnergySummary | null;
   consumptionData: { date: string; kwh: number; threshold: number }[];
   zoneDistribution: { name: string; value: number; color: string }[];
-  devices: any[];
-  alerts: any[];
-  automations: any[];
+  devices: Device[];
+  alerts: Alert[];
+  automations: unknown[];
   isLoading: boolean;
   noBuilding: boolean;
 }
@@ -28,7 +29,7 @@ interface DashboardData {
 const COLORS = ["#00C9A7", "#3B82F6", "#FFA726", "#A855F7", "#FF4757", "#22C55E"];
 
 const DashboardPage = () => {
-  const [buildings, setBuildings] = useState<any[]>([]);
+  const [buildings, setBuildings] = useState<Building[]>([]);
   const [selectedBuilding, setSelectedBuilding] = useState<string>("");
   const [data, setData] = useState<DashboardData>({
     energySummary: null,
@@ -46,12 +47,12 @@ const DashboardPage = () => {
     (async () => {
       try {
         const res = await api.get("/api/v1/buildings");
-        const buildingList = res.data || [];
+        const buildingList: Building[] = Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
         setBuildings(buildingList);
         
         // Restaurer le bâtiment depuis localStorage, ou prendre le premier
         const savedBuildingId = localStorage.getItem("afrixora_selected_building");
-        if (savedBuildingId && buildingList.some((b: any) => b.id === savedBuildingId)) {
+        if (savedBuildingId && buildingList.some((b: Building) => b.id === savedBuildingId)) {
           setSelectedBuilding(savedBuildingId);
         } else if (buildingList.length > 0) {
           setSelectedBuilding(buildingList[0].id);
@@ -59,7 +60,7 @@ const DashboardPage = () => {
           setData(prev => ({ ...prev, noBuilding: true, isLoading: false }));
         }
       } catch (err) {
-        console.error(err);
+        logger.error("Erreur chargement bâtiments", err);
         setData(prev => ({ ...prev, isLoading: false, noBuilding: true }));
       }
     })();
@@ -91,19 +92,26 @@ const DashboardPage = () => {
         if (cancelled) return;
 
         // Filtrer les devices et alertes par le buildingId
-        const allDevices = devRes.data || [];
-        const buildingDevices = allDevices.filter((d: any) => d.buildingId === selectedBuilding);
-        const buildingAlerts = (alRes.data || []).filter((a: any) => a.buildingId === selectedBuilding);
-        const buildingAutomations = (auRes.data || []).filter((a: any) => a.buildingId === selectedBuilding);
+        const allDevices: Device[] = Array.isArray(devRes.data) ? devRes.data : (devRes.data?.data ?? []);
+        const buildingDevices = allDevices.filter((d: Device) => d.buildingId === selectedBuilding);
+        const buildingAlerts: Alert[] = Array.isArray(alRes.data) ? alRes.data : (alRes.data?.data ?? []);
+        const filteredAlerts = buildingAlerts.filter((a: Alert) => a.buildingId === selectedBuilding);
+        const allAutomations: unknown[] = Array.isArray(auRes.data) ? auRes.data : (auRes.data?.data ?? []);
+        const buildingAutomations = allAutomations.filter((a) => {
+          if (typeof a === 'object' && a !== null) {
+            return (a as Record<string, unknown>).buildingId === selectedBuilding;
+          }
+          return false;
+        });
 
-        const consumptionData = (consRes.data || []).map((i: any) => ({
+        const consumptionData = (Array.isArray(consRes.data) ? consRes.data : (consRes.data?.data ?? [])).map((i: ConsumptionBucket) => ({
           date: new Date(i.bucket).toLocaleDateString("fr-FR", { weekday: "short" }),
           kwh: i.total_kwh,
           threshold: 25,
         }));
 
-        const zoneDistribution = (zoneRes.data || []).map((i: any, idx: number) => ({
-          name: i.zone_name || `Zone ${idx + 1}`,
+        const zoneDistribution = (Array.isArray(zoneRes.data) ? zoneRes.data : (zoneRes.data?.data ?? [])).map((i: ZoneBucket, idx: number) => ({
+          name: i.zone_name || i.name || `Zone ${idx + 1}`,
           value: i.total_kwh,
           color: COLORS[idx % COLORS.length],
         }));
@@ -113,33 +121,18 @@ const DashboardPage = () => {
           consumptionData,
           zoneDistribution,
           devices: buildingDevices,
-          alerts: buildingAlerts,
+          alerts: filteredAlerts,
           automations: buildingAutomations,
           isLoading: false,
           noBuilding: false,
         });
       } catch (err) {
-        console.error(err);
+        logger.error("Erreur chargement données dashboard", err);
         if (!cancelled) setData(prev => ({ ...prev, isLoading: false }));
       }
     })();
     return () => { cancelled = true; };
   }, [selectedBuilding]);
-
-  // Affichage si aucun bâtiment n'existe
-  if (data.noBuilding) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center space-y-3">
-          <p className="text-muted-foreground">Aucun bâtiment enregistré.</p>
-          <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => window.location.href = "/buildings"}>
-            Ajouter un bâtiment
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
 
   const user = useStore(state => state.user);
   const impersonatedTenantId = useStore(state => state.impersonatedTenantId);
@@ -153,18 +146,34 @@ const DashboardPage = () => {
     }
   }, [user, impersonatedTenantId]);
 
-  if (showSuperAdmin) {
-    return <SuperAdminDashboard />;
+  // Tous les hooks sont exécutés avant tout return conditionnel
+  // pour éviter l'erreur "Rendered fewer hooks than expected"
+
+  if (data.noBuilding) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center space-y-3">
+          <p className="text-muted-foreground">Aucun bâtiment enregistré.</p>
+          <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => window.location.href = "/buildings"}>
+            Ajouter un bâtiment
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   if (data.isLoading) {
     return <div className="flex items-center justify-center h-64 text-muted-foreground">Chargement...</div>;
   }
 
-  const onlineDevices = data.devices.filter((d: any) => d.isOnline).length;
+  if (showSuperAdmin) {
+    return <SuperAdminDashboard />;
+  }
+
+  const onlineDevices = data.devices.filter((d: Device) => d.isOnline).length;
   const totalDevices = data.devices.length;
-  const activeAlerts = data.alerts.filter((a: any) => !a.isRead).length;
-  const criticalAlerts = data.alerts.filter((a: any) => a.severity === "CRITICAL" && !a.isRead).length;
+  const activeAlerts = data.alerts.filter((a: Alert) => !a.isRead).length;
+  const criticalAlerts = data.alerts.filter((a: Alert) => a.severity === "CRITICAL" && !a.isRead).length;
   const selectedBuildingName = buildings.find(b => b.id === selectedBuilding)?.name || "Bâtiment";
 
   return (
@@ -184,7 +193,7 @@ const DashboardPage = () => {
                 <SelectValue placeholder="Sélectionner un bâtiment" />
               </SelectTrigger>
               <SelectContent>
-                {buildings.map((b: any) => (
+                {buildings.map((b: Building) => (
                   <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
                 ))}
               </SelectContent>
@@ -269,7 +278,7 @@ const DashboardPage = () => {
             <div>
               <h3 className="font-semibold mb-3">Appareils IoT</h3>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {data.devices.slice(0, 6).map((d: any) => (
+                {data.devices.slice(0, 6).map((d: Device) => (
                   <Card key={d.id} className={`p-3 ${d.config?.state === "on" ? "border-emerald-500/30 bg-emerald-500/5" : ""}`}>
                     <div className="flex items-center justify-between mb-2">
                       <div className="w-8 h-8 rounded bg-muted flex items-center justify-center text-xs font-bold">{d.type[0]}</div>
@@ -293,7 +302,7 @@ const DashboardPage = () => {
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie data={data.zoneDistribution} cx="50%" cy="50%" innerRadius={40} outerRadius={70} dataKey="value" nameKey="name">
-                      {data.zoneDistribution.map((entry: any, i: number) => <Cell key={i} fill={entry.color} />)}
+                      {data.zoneDistribution.map((entry, i: number) => <Cell key={i} fill={entry.color} />)}
                     </Pie>
                     <Tooltip />
                     <Legend layout="vertical" align="right" />
@@ -310,8 +319,8 @@ const DashboardPage = () => {
           <Card>
             <CardHeader><CardTitle>Alertes actives</CardTitle></CardHeader>
             <CardContent>
-              {data.alerts.filter((a: any) => !a.isRead).length > 0 ? (
-                data.alerts.filter((a: any) => !a.isRead).slice(0, 3).map((a: any) => (
+              {data.alerts.filter((a: Alert) => !a.isRead).length > 0 ? (
+                data.alerts.filter((a: Alert) => !a.isRead).slice(0, 3).map((a: Alert) => (
                   <div key={a.id} className="flex items-start gap-2 py-2 border-b border-border last:border-0">
                     <Badge className={a.severity === "CRITICAL" ? "bg-red-600" : a.severity === "WARNING" ? "bg-orange-500" : "bg-emerald-600"}>
                       {a.severity === "CRITICAL" ? "CRIT" : a.severity === "WARNING" ? "WARN" : "INFO"}
@@ -333,15 +342,22 @@ const DashboardPage = () => {
             <CardHeader><CardTitle>Automatisations</CardTitle></CardHeader>
             <CardContent>
               {data.automations.length > 0 ? (
-                data.automations.slice(0, 3).map((a: any) => (
-                  <div key={a.id} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                    <div>
-                      <p className="text-sm font-medium">{a.name}</p>
-                      <p className="text-xs text-muted-foreground">SI {a.trigger?.metric} {a.trigger?.operator} {a.trigger?.value} → {a.action?.type}</p>
+                data.automations.slice(0, 3).map((a) => {
+                  const automation = a as Record<string, unknown>;
+                  const trigger = automation.trigger as Record<string, unknown> | undefined;
+                  const action = automation.action as Record<string, unknown> | undefined;
+                  return (
+                    <div key={automation.id as string} className="flex items-center justify-between py-2 border-b border-border last:border-0">
+                      <div>
+                        <p className="text-sm font-medium">{automation.name as string}</p>
+                        <p className="text-xs text-muted-foreground">
+                          SI {trigger?.metric as string} {trigger?.operator as string} {trigger?.value as string} → {action?.type as string}
+                        </p>
+                      </div>
+                      <Switch checked={automation.isActive as boolean} />
                     </div>
-                    <Switch checked={a.isActive} />
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <p className="text-sm text-muted-foreground text-center py-4">Aucune automatisation configurée</p>
               )}

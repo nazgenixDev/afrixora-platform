@@ -6,19 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import api from "@/lib/api";
+import logger from "@/lib/logger";
 import { Card } from "@/components/ui/card";
 import useStore from "@/store";
-import type { Device } from "@/types";
-
-interface Building {
-  id: string;
-  name: string;
-}
-
-interface Zone {
-  id: string;
-  name: string;
-}
+import type { Device, Building, Zone } from "@/types";
 
 const STATS_COLORS = {
   total: "bg-emerald-500/10 text-emerald-400",
@@ -44,6 +35,79 @@ const TYPE_LABELS: Record<string, string> = {
   THERMOSTAT: "Thermostat",
   ENERGY_METER: "Compteur",
   DOOR_SENSOR: "Capteur porte",
+};
+
+// Composant AddDeviceDialog déplacé AVANT DevicesPage pour qu'il soit défini
+const AddDeviceDialog = ({ 
+  open, 
+  onOpenChange, 
+  buildings, 
+  zones, 
+  selectedBuildingId, 
+  onBuildingChange, 
+  onDeviceCreated 
+}: { 
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  buildings: Building[];
+  zones: Zone[];
+  selectedBuildingId: string;
+  onBuildingChange: (buildingId: string) => void;
+  onDeviceCreated: () => Promise<void>;
+}) => {
+  const [name, setName] = useState("");
+  const [type, setType] = useState("LIGHT");
+  const [protocol, setProtocol] = useState("MQTT");
+  const [zoneId, setZoneId] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!name || !selectedBuildingId) return;
+    setLoading(true);
+    try {
+      const payload: any = { name, type, buildingId: selectedBuildingId, protocol };
+      if (zoneId && zoneId !== "__none__") payload.zoneId = zoneId;
+      await api.post('/api/v1/devices', payload);
+      await onDeviceCreated();
+      onOpenChange(false);
+      setName(""); setType("LIGHT"); setProtocol("MQTT"); setZoneId("");
+    } catch (err) { logger.error(String(err)); } finally { setLoading(false); }
+  };
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40" onClick={() => onOpenChange(false)} />
+      <div className="relative bg-card border rounded-lg p-6 w-full max-w-md">
+        <h2 className="text-lg font-semibold mb-4">Ajouter un appareil</h2>
+        <div className="space-y-3">
+          <Input placeholder="Nom" value={name} onChange={e => setName(e.target.value)} />
+          <select className="w-full h-9 rounded-md border bg-background px-3 text-sm" value={type} onChange={e => setType(e.target.value)}>
+            {Object.entries(TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+          <select className="w-full h-9 rounded-md border bg-background px-3 text-sm" value={selectedBuildingId} onChange={e => { onBuildingChange(e.target.value); setZoneId(''); }}>
+            <option value="">Bâtiment</option>
+            {buildings.map((b: Building) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+          <select className="w-full h-9 rounded-md border bg-background px-3 text-sm" value={zoneId} onChange={e => setZoneId(e.target.value)} disabled={!zones.length}>
+            <option value="">Aucune zone</option>
+            <option value="__none__">—</option>
+            {zones.map((z: Zone) => <option key={z.id} value={z.id}>{z.name}</option>)}
+          </select>
+          <select className="w-full h-9 rounded-md border bg-background px-3 text-sm" value={protocol} onChange={e => setProtocol(e.target.value)}>
+            <option value="MQTT">MQTT</option>
+            <option value="ZIGBEE">Zigbee</option>
+            <option value="WIFI">WiFi</option>
+          </select>
+        </div>
+        <div className="flex justify-end gap-2 mt-4">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Annuler</Button>
+          <Button onClick={handleSubmit} disabled={loading || !name || !selectedBuildingId}>{loading ? "..." : "Créer"}</Button>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 const DevicesPage = () => {
@@ -74,13 +138,15 @@ const DevicesPage = () => {
           api.get('/api/v1/devices'),
           api.get('/api/v1/buildings'),
         ]);
-        setDevices(dRes.data);
-        setFilteredDevices(dRes.data);
-        setBuildings(bRes.data);
+        const devicesRaw = dRes.data;
+        const buildingsRaw = bRes.data;
+        setDevices(Array.isArray(devicesRaw) ? devicesRaw : (devicesRaw?.data ?? []));
+        setFilteredDevices(Array.isArray(devicesRaw) ? devicesRaw : (devicesRaw?.data ?? []));
+        setBuildings(Array.isArray(buildingsRaw) ? buildingsRaw : (buildingsRaw?.data ?? []));
         if (bRes.data.length > 0) setSelectedBuildingId(bRes.data[0].id);
         setError(null);
       } catch (err) {
-        console.error(err);
+        logger.error(String(err));
         setError("Erreur lors du chargement des appareils.");
       } finally {
         setIsLoading(false);
@@ -113,7 +179,7 @@ const DevicesPage = () => {
       setDevices(prev => prev.map(d => d.id === id ? { ...d, config: { ...d.config, state: newState ? 'on' : 'off' } } : d));
       updateDevice(id, { config: { state: newState ? 'on' : 'off' } } as any);
     } catch (err) {
-      console.error(err);
+      logger.error(String(err));
     }
   };
 
@@ -167,10 +233,11 @@ const DevicesPage = () => {
         </div>
         {selectedIds.size > 0 && (
           <div className="flex gap-1">
-            <Button variant="outline" size="sm" onClick={() => bulkToggle(true)}>Allumer</Button>}
-            <Button variant="outline" size="sm" onClick={() => bulkToggle(false)}>Éteindre</Button>}
+            <Button variant="outline" size="sm" onClick={() => bulkToggle(true)}>Allumer</Button>
+            <Button variant="outline" size="sm" onClick={() => bulkToggle(false)}>Éteindre</Button>
           </div>
         )}
+        {/* CORRECTION : ajout de l'accolade fermante après </Button> */}
         {canEdit && <Button className="ml-auto bg-emerald-600 hover:bg-emerald-700" onClick={() => setShowAddDialog(true)}>+ Ajouter</Button>}
       </div>
 
@@ -213,14 +280,14 @@ const DevicesPage = () => {
                   <td className="p-3">
                     <div className="font-medium">{d.name}</div>
                     <div className="text-xs text-muted-foreground">{d.id}</div>
-                  </td>
+                   </td>
                   <td className="p-3"><Badge className={TYPE_BADGES[d.type] || ""}>{TYPE_LABELS[d.type] || d.type}</Badge></td>
                   <td className="p-3 text-muted-foreground">{d.zone?.name || "—"}</td>
                   <td className="p-3"><Badge variant={d.isOnline ? "default" : "destructive"} className="text-xs">{d.isOnline ? "En ligne" : "Hors ligne"}</Badge></td>
                   <td className="p-3"><Switch checked={d.config?.state === 'on' || d.config?.power === 'on'} onCheckedChange={checked => toggleDevice(d.id, checked)} onClick={e => e.stopPropagation()} /></td>
                   <td className="p-3">
                     <div className="flex gap-1 opacity-0 hover:opacity-100 transition-opacity">
-                      <Button variant="ghost" size="icon" onClick={e => { e.stopPropagation(); setDrawerDevice(d); }}>⋯</Button>}
+                      <Button variant="ghost" size="icon" onClick={e => { e.stopPropagation(); setDrawerDevice(d); }}>⋯</Button>
                     </div>
                   </td>
                 </tr>
@@ -250,7 +317,7 @@ const DevicesPage = () => {
           <div className="absolute right-0 top-0 h-full w-80 bg-card border-l shadow-xl p-4 overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold">{drawerDevice.name}</h3>
-              <Button variant="ghost" size="icon" onClick={() => setDrawerDevice(null)}>✕</Button>}
+              <Button variant="ghost" size="icon" onClick={() => setDrawerDevice(null)}>✕</Button>
             </div>
             <div className="space-y-3 text-sm">
               <div><span className="text-muted-foreground">Type</span> <span className="float-right">{TYPE_LABELS[drawerDevice.type]}</span></div>
@@ -264,78 +331,22 @@ const DevicesPage = () => {
         </div>
       )}
 
-      {/* Dialog Ajouter (existant AddDeviceDialog) */}
-      {showAddDialog && (
-        <AddDeviceDialog
-          open={showAddDialog}
-          onOpenChange={setShowAddDialog}
-          buildings={buildings}
-          zones={zones}
-          selectedBuildingId={selectedBuildingId}
-          onBuildingChange={handleBuildingChange}
-          onDeviceCreated={async () => {
-            const res = await api.get('/api/v1/devices');
-            setDevices(res.data);
-          }}
-        />
-      )}
+      {/* Dialog Ajouter */}
+      <AddDeviceDialog
+        open={showAddDialog}
+        onOpenChange={setShowAddDialog}
+        buildings={buildings}
+        zones={zones}
+        selectedBuildingId={selectedBuildingId}
+        onBuildingChange={handleBuildingChange}
+        onDeviceCreated={async () => {
+          const res = await api.get('/api/v1/devices');
+          const devicesRaw = res.data;
+          setDevices(Array.isArray(devicesRaw) ? devicesRaw : (devicesRaw?.data ?? []));
+        }}
+      />
     </div>
   );
 };
 
 export default DevicesPage;
-
-// AddDeviceDialog minimal inclus ici (ou importé)
-const AddDeviceDialog = ({ open, onOpenChange, buildings, zones, selectedBuildingId, onBuildingChange, onDeviceCreated }: any) => {
-  const [name, setName] = useState("");
-  const [type, setType] = useState("LIGHT");
-  const [protocol, setProtocol] = useState("MQTT");
-  const [zoneId, setZoneId] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async () => {
-    if (!name || !selectedBuildingId) return;
-    setLoading(true);
-    try {
-      const payload: any = { name, type, buildingId: selectedBuildingId, protocol };
-      if (zoneId && zoneId !== "__none__") payload.zoneId = zoneId;
-      await api.post('/api/v1/devices', payload);
-      onDeviceCreated();
-      onOpenChange(false);
-      setName(""); setType("LIGHT"); setProtocol("MQTT"); setZoneId("");
-    } catch (err) { console.error(err); } finally { setLoading(false); }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/40" onClick={() => onOpenChange(false)} />
-      <div className="relative bg-card border rounded-lg p-6 w-full max-w-md">
-        <h2 className="text-lg font-semibold mb-4">Ajouter un appareil</h2>
-        <div className="space-y-3">
-          <Input placeholder="Nom" value={name} onChange={e => setName(e.target.value)} />
-          <select className="w-full h-9 rounded-md border bg-background px-3 text-sm" value={type} onChange={e => setType(e.target.value)}>
-            {Object.entries(TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </select>
-          <select className="w-full h-9 rounded-md border bg-background px-3 text-sm" value={selectedBuildingId} onChange={e => { onBuildingChange(e.target.value); setZoneId(''); }}>
-            <option value="">Bâtiment</option>
-            {buildings.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
-          <select className="w-full h-9 rounded-md border bg-background px-3 text-sm" value={zoneId} onChange={e => setZoneId(e.target.value)} disabled={!zones.length}>
-            <option value="">Aucune zone</option>
-            <option value="__none__">—</option>
-            {zones.map((z: any) => <option key={z.id} value={z.id}>{z.name}</option>)}
-          </select>
-          <select className="w-full h-9 rounded-md border bg-background px-3 text-sm" value={protocol} onChange={e => setProtocol(e.target.value)}>
-            <option value="MQTT">MQTT</option>
-            <option value="ZIGBEE">Zigbee</option>
-            <option value="WIFI">WiFi</option>
-          </select>
-        </div>
-        <div className="flex justify-end gap-2 mt-4">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Annuler</Button>}
-          <Button onClick={handleSubmit} disabled={loading || !name || !selectedBuildingId}>{loading ? "..." : "Créer"}</Button>}
-        </div>
-      </div>
-    </div>
-  );
-};

@@ -2,7 +2,7 @@ import winston from 'winston';
 
 // Configure the Winston logger based on the environment
 const logger = winston.createLogger({
-  level: process.env.NODE_ENV === 'development' ? 'info' : 'warn',
+  level: 'info',
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.json()

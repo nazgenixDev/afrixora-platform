@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import useStore from '@/store';
-import { getToken } from '@/lib/auth';
 
 interface UseSocketOptions {
   buildingId?: string;
@@ -11,6 +10,7 @@ interface UseSocketOptions {
 /**
  * Hook for managing Socket.IO connection to the AFRIXORA backend
  * Handles authentication, room joining, and event listening
+ * Note: L'authentification Socket.IO utilise le cookie httpOnly (withCredentials)
  */
 const useSocket = ({ buildingId, enabled = true }: UseSocketOptions = {}) => {
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -26,16 +26,9 @@ const useSocket = ({ buildingId, enabled = true }: UseSocketOptions = {}) => {
       return;
     }
 
-    // Get auth token
-    const token = getToken();
-    if (!token) {
-      setError('Authentication token not found');
-      return;
-    }
-
-    // Initialize socket connection with auth token
+    // Initialize socket connection (cookie httpOnly envoyé auto via withCredentials)
     const socketInstance = io(process.env.NEXT_PUBLIC_API_URL || '', {
-      auth: { token },
+      withCredentials: true,
       transports: ['websocket'],
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
@@ -47,7 +40,7 @@ const useSocket = ({ buildingId, enabled = true }: UseSocketOptions = {}) => {
       setError(null);
       
       // Join building room
-      socketInstance.emit('join', { buildingId });
+      socketInstance.emit('join:building', buildingId);
       console.log(`Socket connected and joined building:${buildingId}`);
     });
 

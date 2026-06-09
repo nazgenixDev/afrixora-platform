@@ -1,10 +1,44 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { z } from "zod";
 import authenticate from "../middleware/authenticate";
 import { authorize } from "../middleware/authorize";
+import { validate } from "../middleware/validate";
 import prisma from "../utils/database";
 import bcrypt from "bcryptjs";
 
 const router = Router();
+
+// ─── Zod schemas ──────────────────────────────────────────────
+
+const createUserSchema = z.object({
+  body: z.object({
+    email: z.string().email("Email invalide"),
+    name: z.string().min(1, "Nom requis"),
+    role: z.enum(["SUPER_ADMIN", "TENANT_ADMIN", "BUILDING_ADMIN", "OPERATOR", "VIEWER"]),
+    password: z.string().min(6, "6 caractères minimum"),
+  }),
+});
+
+const changeRoleSchema = z.object({
+  body: z.object({
+    role: z.enum(["SUPER_ADMIN", "TENANT_ADMIN", "BUILDING_ADMIN", "OPERATOR", "VIEWER"]),
+  }),
+});
+
+const resetPasswordSchema = z.object({
+  body: z.object({
+    newPassword: z.string().min(6, "6 caractères minimum"),
+  }),
+});
+
+const changePasswordSchema = z.object({
+  body: z.object({
+    currentPassword: z.string().min(1, "Mot de passe actuel requis"),
+    newPassword: z.string().min(6, "6 caractères minimum"),
+  }),
+});
+
+// ─── Routes ───────────────────────────────────────────────────
 
 // Récupérer son propre profil (tout utilisateur connecté)
 router.get(
@@ -32,26 +66,41 @@ router.get(
   }
 );
 
-// Lister les utilisateurs du tenant (admin)
+// Lister les utilisateurs du tenant (admin) — avec pagination
 router.get(
   "/",
   authenticate,
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const users = await prisma.user.findMany({
-        where: { tenantId: req.user!.tenantId },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          role: true,
-          isActive: true,
-          createdAt: true,
-        },
-        orderBy: { createdAt: "desc" },
+      const page = parseInt(req.query.page as string, 10) || 1;
+      const limit = parseInt(req.query.limit as string, 10) || 50;
+      const skip = (page - 1) * limit;
+
+      const [users, total] = await Promise.all([
+        prisma.user.findMany({
+          where: { tenantId: req.user!.tenantId },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            role: true,
+            isActive: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: "desc" },
+          skip,
+          take: limit,
+        }),
+        prisma.user.count({ where: { tenantId: req.user!.tenantId } }),
+      ]);
+
+      return res.json({
+        data: users,
+        total,
+        page,
+        totalPages: Math.ceil(total / limit),
       });
-      return res.json(users);
     } catch (err) {
       return next(err);
     }
@@ -63,20 +112,20 @@ router.post(
   "/",
   authenticate,
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
+  validate(createUserSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { email, name, role, password } = req.body;
-      if (!email || !name || !role || !password) {
-        return res.status(400).json({ error: "Tous les champs sont requis" });
-      }
       const passwordHash = await bcrypt.hash(password, 10);
       const user = await prisma.user.create({
         data: { tenantId: req.user!.tenantId, email, name, role, passwordHash },
         select: { id: true, email: true, name: true, role: true, isActive: true, createdAt: true },
       });
       return res.status(201).json(user);
-    } catch (err: any) {
-      if (err.code === "P2002") return res.status(409).json({ error: "Cet email existe déjà" });
+    } catch (err: unknown) {
+      if ((err as { code?: string }).code === "P2002") {
+        return res.status(409).json({ error: "Cet email existe déjà" });
+      }
       return next(err);
     }
   }
@@ -105,6 +154,7 @@ router.patch(
   "/:id/role",
   authenticate,
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
+  validate(changeRoleSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { role } = req.body;
@@ -119,10 +169,10 @@ router.patch(
   "/:id/reset-password",
   authenticate,
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
+  validate(resetPasswordSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { newPassword } = req.body;
-      if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: "6 caractères minimum" });
       const user = await prisma.user.findFirst({ where: { id: req.params.id, tenantId: req.user!.tenantId } });
       if (!user) return res.status(404).json({ error: "Utilisateur introuvable" });
       const newHash = await bcrypt.hash(newPassword, 10);
@@ -152,11 +202,10 @@ router.delete(
 router.patch(
   "/change-password",
   authenticate,
+  validate(changePasswordSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { currentPassword, newPassword } = req.body;
-      if (!currentPassword || !newPassword) return res.status(400).json({ error: "Les deux mots de passe sont requis" });
-      if (newPassword.length < 6) return res.status(400).json({ error: "6 caractères minimum" });
       const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
       if (!user) return res.status(404).json({ error: "Utilisateur introuvable" });
       const isValid = await bcrypt.compare(currentPassword, user.passwordHash);

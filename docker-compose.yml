@@ -4,6 +4,11 @@ services:
   postgres:
     image: timescale/timescaledb:latest-pg15
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2GB
+          cpus: '1.0'
     expose:
       - "5432"
     volumes:
@@ -24,22 +29,34 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512MB
+          cpus: '0.25'
     expose:
       - "6379"
     volumes:
       - afrixora_redis_data:/data
-    command: redis-server --requirepass ${REDIS_PASSWORD}
+    command: >
+      redis-server --requirepass "${REDIS_PASSWORD}"
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
     networks:
       - afrixora_net
 
   mosquitto:
     image: eclipse-mosquitto:2
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256MB
+          cpus: '0.25'
     expose:
       - "1883"
       - "9001"
@@ -54,6 +71,11 @@ services:
   api:
     build: ./backend
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1GB
+          cpus: '0.75'
     expose:
       - "4000"
     environment:
@@ -88,6 +110,11 @@ services:
   frontend:
     build: ./frontend
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512MB
+          cpus: '0.5'
     expose:
       - "3000"
     environment:
@@ -101,6 +128,32 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`)"
       - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+
+  postgres-backup:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    volumes:
+      - ./backups:/backups
+      - ./infrastructure/scripts/backup.sh:/usr/local/bin/backup.sh:ro
+    environment:
+      - DB_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_USER=afrixora
+      - POSTGRES_DB=afrixora_prod
+      - PGPASSWORD=${DB_PASSWORD}
+      - PGUSER=afrixora
+      - PGHOST=postgres
+      - PGDATABASE=afrixora_prod
+    entrypoint: |
+      sh -c "
+      chmod +x /usr/local/bin/backup.sh
+      echo '0 2 * * * /usr/local/bin/backup.sh' > /etc/crontabs/root
+      crond -f -l 2
+      "
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - afrixora_net
 
   traefik:
     image: traefik:v3.0
@@ -133,8 +186,8 @@ services:
   grafana:
     image: grafana/grafana:latest
     restart: unless-stopped
-    expose:
-      - "3000"
+    ports:
+      - "3001:3000"
     volumes:
       - afrixora_grafana_data:/var/lib/grafana
       - ./infrastructure/monitoring/datasources:/etc/grafana/provisioning/datasources:ro

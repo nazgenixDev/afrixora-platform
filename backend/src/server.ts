@@ -1,9 +1,12 @@
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
 import cors from 'cors';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import logger from './utils/logger';
+import redisClient from './utils/redis';
 
 import authRoutes from './routes/auth';
 import buildingRoutes from './routes/buildings';
@@ -26,6 +29,10 @@ import { authenticateOrApiKey } from './middleware/authenticateOrApiKey';
 import { apiKeyAuth } from './middleware/apiKeyAuth';
 
 import { connectMQTT } from './services/mqttWorker';
+import { checkEnv } from './scripts/checkEnv';
+
+// Vérification critique des variables d'environnement au démarrage
+checkEnv();
 
 const app = express();
 const server = http.createServer(app);
@@ -38,12 +45,17 @@ const io = new Server(server, {
   }
 });
 
+io.adapter(createAdapter(redisClient, redisClient.duplicate()));
+
 app.use(helmet());
+app.set("trust proxy", true);
+app.set("trust proxy", true);
 app.use(cors({
   origin: process.env.CORS_ORIGINS?.split(',') || 'http://localhost:3000',
   credentials: true
 }));
 app.use(express.json());
+app.use(cookieParser());
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });

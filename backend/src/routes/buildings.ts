@@ -1,6 +1,6 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { buildingService } from '../services/buildingService';
+import buildingService from '../services/buildingService';
 import { authorize } from '../middleware/authorize';
 
 const router = Router();
@@ -21,55 +21,81 @@ const createZoneSchema = z.object({
 });
 
 // GET / — liste les bâtiments du tenant
-router.get('/', (req, res, next) => {
-  buildingService.findAll(req.user!.tenantId)
-    .then(buildings => res.json(buildings))
-    .catch(next);
+router.get('/', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { page, limit } = req.query;
+    const pagination = {
+      page: page ? parseInt(page as string, 10) : 1,
+      limit: limit ? parseInt(limit as string, 10) : 50,
+    };
+    const buildings = await buildingService.findAll(req.user!.tenantId, pagination);
+    return res.json(buildings);
+  } catch (err) {
+    next(err); return;
+  }
 });
 
 // POST / — créer un bâtiment
-router.post('/', authorize(['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN']), (req, res, next) => {
-  const data = createBuildingSchema.parse(req.body);
-  buildingService.create(data, req.user!.tenantId)
-    .then(building => res.status(201).json(building))
-    .catch(next);
+router.post('/', authorize(['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN']), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const data = { ...createBuildingSchema.parse(req.body), tenantId: req.user!.tenantId };
+    const building = await buildingService.create(data, req.user!.tenantId);
+    return res.status(201).json(building);
+  } catch (err) {
+    next(err); return;
+  }
 });
 
 // GET /:id — détail du bâtiment
-router.get('/:id', (req, res, next) => {
-  buildingService.findById(req.params.id, req.user!.tenantId)
-    .then(building => res.json(building))
-    .catch(next);
+router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const building = await buildingService.findById(req.params.id, req.user!.tenantId);
+    return res.json(building);
+  } catch (err) {
+    next(err); return;
+  }
 });
 
 // PATCH /:id — modifier un bâtiment
-router.patch('/:id', authorize(['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN']), (req, res, next) => {
-  const data = updateBuildingSchema.parse(req.body);
-  buildingService.update(req.params.id, data, req.user!.tenantId)
-    .then(building => res.json(building))
-    .catch(next);
+router.patch('/:id', authorize(['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN']), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const data = updateBuildingSchema.parse(req.body);
+    const building = await buildingService.update(req.params.id, data, req.user!.tenantId);
+    return res.json(building);
+  } catch (err) {
+    next(err); return;
+  }
 });
 
 // DELETE /:id — désactiver un bâtiment
-router.delete('/:id', authorize(['SUPER_ADMIN', 'TENANT_ADMIN']), (req, res, next) => {
-  buildingService.softDelete(req.params.id, req.user!.tenantId)
-    .then(() => res.status(204).send())
-    .catch(next);
+router.delete('/:id', authorize(['SUPER_ADMIN', 'TENANT_ADMIN']), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await buildingService.softDelete(req.params.id, req.user!.tenantId);
+    return res.status(204).send();
+  } catch (err) {
+    next(err); return;
+  }
 });
 
 // GET /:id/zones — liste les zones du bâtiment
-router.get('/:id/zones', (req, res, next) => {
-  buildingService.findZones(req.params.id, req.user!.tenantId)
-    .then(zones => res.json(zones))
-    .catch(next);
+router.get('/:id/zones', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const zones = await buildingService.findZones(req.params.id, req.user!.tenantId);
+    return res.json(zones);
+  } catch (err) {
+    next(err); return;
+  }
 });
 
 // POST /:id/zones — créer une zone
-router.post('/:id/zones', authorize(['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN']), (req, res, next) => {
-  const data = createZoneSchema.parse(req.body);
-  buildingService.createZone(req.params.id, data, req.user!.tenantId)
-    .then(zone => res.status(201).json(zone))
-    .catch(next);
+router.post('/:id/zones', authorize(['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN']), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const data = { ...createZoneSchema.parse(req.body), tenantId: req.user!.tenantId, buildingId: req.params.id };
+    const zone = await buildingService.createZone(req.params.id, data, req.user!.tenantId);
+    return res.status(201).json(zone);
+  } catch (err) {
+    next(err); return;
+  }
 });
 
 export default router;

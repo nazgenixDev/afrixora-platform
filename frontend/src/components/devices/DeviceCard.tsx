@@ -1,3 +1,4 @@
+import logger from "@/lib/logger";
 import React, { useState } from 'react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -182,7 +183,7 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
         }
       }
     } catch (err) {
-      console.error('Error toggling device:', err);
+      logger.error('Error toggling device:', err);
       setError('Failed to control device');
       // Revert the switch state on error
       setIsOn(!checked);

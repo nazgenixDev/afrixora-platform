@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import api from "@/lib/api";
+import logger from "@/lib/logger";
 
 interface Building {
   id: string;
@@ -21,10 +22,12 @@ const ReportsPage = (): JSX.Element => {
     (async () => {
       try {
         const response = await api.get('/api/v1/buildings');
-        setBuildings(response.data);
-        if (response.data.length > 0) setSelectedBuilding(response.data[0].id);
+        const raw = response.data;
+        const buildingList = Array.isArray(raw) ? raw : (raw?.data ?? []);
+        setBuildings(buildingList);
+        if (buildingList.length > 0) setSelectedBuilding(buildingList[0].id);
       } catch (err) {
-        console.error(err);
+        logger.error("Erreur chargement bâtiments", err);
       } finally {
         setIsLoading(false);
       }
@@ -54,7 +57,7 @@ const ReportsPage = (): JSX.Element => {
       link.remove();
       window.URL.revokeObjectURL(url);
     } catch (err) {
-      console.error('Erreur de téléchargement :', err);
+      logger.error("Erreur téléchargement rapport", err);
     }
   };
 

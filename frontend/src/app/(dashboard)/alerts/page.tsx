@@ -13,6 +13,7 @@ import {
 import useSocket from "@/hooks/useSocket";
 import useStore, { Alert, Severity } from "@/store";
 import api from "@/lib/api";
+import logger from "@/lib/logger";
 
 interface Building {
   id: string;
@@ -53,9 +54,10 @@ const AlertsPage = (): JSX.Element => {
     const fetchBuildings = async () => {
       try {
         const response = await api.get("/api/v1/buildings");
-        setBuildings(response.data);
+        const raw = response.data;
+        setBuildings(Array.isArray(raw) ? raw : (raw?.data ?? []));
       } catch (err) {
-        console.error("Error fetching buildings:", err);
+        logger.error("Error fetching buildings:", err);
         setError("Failed to load buildings");
       }
     };
@@ -77,16 +79,18 @@ const AlertsPage = (): JSX.Element => {
         if (filters.buildingId !== "ALL") params.buildingId = filters.buildingId;
 
         const response = await api.get("/api/v1/alerts", { params });
-        setAlerts(response.data);
+        const alertRaw = response.data;
+        const alertList = Array.isArray(alertRaw) ? alertRaw : (alertRaw?.data ?? []);
+        setAlerts(alertList);
 
         // Add alerts to store for real-time updates
-        response.data.forEach((alert: Alert) => {
+        alertList.forEach((alert: Alert) => {
           if (!storeAlerts.some((a) => a.id === alert.id)) {
             addAlert(alert);
           }
         });
       } catch (err) {
-        console.error("Error fetching alerts:", err);
+        logger.error("Error fetching alerts:", err);
         setError("Failed to load alerts");
       } finally {
         setIsLoading(false);
@@ -137,7 +141,7 @@ const AlertsPage = (): JSX.Element => {
         )
       );
     } catch (err) {
-      console.error("Error marking alert as read:", err);
+      logger.error("Error marking alert as read:", err);
     }
   };
 

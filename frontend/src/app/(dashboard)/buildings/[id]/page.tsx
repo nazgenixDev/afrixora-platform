@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import api from "@/lib/api";
+import logger from "@/lib/logger";
 import useStore from "@/store";
 import { ArrowLeft, Plus } from "lucide-react";
 
@@ -71,11 +72,12 @@ const BuildingDetailPage = (): JSX.Element => {
       const buildingData = bRes.data;
       setBuilding(buildingData);
       setZones(buildingData.zones || []);
-      setDevices(dRes.data || []);
+      const dRaw = dRes.data;
+      setDevices(Array.isArray(dRaw) ? dRaw : (dRaw?.data ?? []));
       setEnergySummary(eRes.data ?? eRes);
       setError(null);
     } catch (err) {
-      console.error(err);
+      logger.error(String(err));
       setError("Impossible de charger les détails du bâtiment.");
     } finally {
       setIsLoading(false);
@@ -100,7 +102,7 @@ const BuildingDetailPage = (): JSX.Element => {
       setZoneType("ROOM");
       fetchData(); // rafraîchir la liste des zones
     } catch (err) {
-      console.error(err);
+      logger.error(String(err));
     }
   };
 

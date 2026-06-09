@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import api from "@/lib/api";
+import logger from "@/lib/logger";
 
 interface Building {
   id: string;
@@ -58,7 +59,7 @@ const AddDeviceDialog: React.FC<AddDeviceDialogProps> = ({ open, onOpenChange, b
       setProtocol("MQTT");
       setZoneId("");
     } catch (err) {
-      console.error(err);
+      logger.error("Erreur ajout device", err);
     } finally {
       setLoading(false);
     }

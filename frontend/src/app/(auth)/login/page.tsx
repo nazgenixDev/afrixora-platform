@@ -1,101 +1,67 @@
 "use client";
 
-import useStore from "@/store";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import api from "@/lib/api";
-import { setToken, redirectToDashboard } from "@/lib/auth";
 
-const LoginPage = (): JSX.Element => {
-  const [email, setEmail] = useState<string>("");
-  const [password, setPassword] = useState<string>("");
-  const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+export default function LoginPage() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setIsLoading(true);
-
-    try {
-      const response = await api.post("/api/v1/auth/login", {
-        email,
-        password,
-      });
-
-      // Store token in localStorage
-      const { accessToken, user } = response.data;
-      setToken(accessToken);
-      useStore.getState().setAuth(user, accessToken);
-
-      // Redirect to dashboard
-      redirectToDashboard();
-    } catch (err: any) {
-      console.error("Login error:", err);
-      setError(
-        err.response?.data?.message || 
-        "Une erreur s'est produite lors de la connexion. Veuillez réessayer."
-      );
-      setIsLoading(false);
+  e.preventDefault();
+  setError("");
+  setLoading(true);
+  try {
+    const response = await api.post("/api/v1/auth/login", { email, password });
+    if (response.data.user) {
+      localStorage.setItem("afrixora_token", response.data.accessToken);
+      // Rechargement complet pour que le layout refasse l'appel à /me
+      window.location.href = "/";
+    } else {
+      setError("Réponse inattendue du serveur");
     }
-  };
-
+  } catch (err: any) {
+    console.error("Login error:", err);
+    setError(err.response?.data?.error || "Erreur de connexion");
+  } finally {
+    setLoading(false);
+  }
+};
   return (
-    <div className="flex items-center justify-center min-h-screen bg-background p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="space-y-1">
-          <CardTitle className="text-2xl font-bold text-center">AFRIXORA</CardTitle>
-          <CardDescription className="text-center">
-            Connectez-vous à votre compte
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="exemple@entreprise.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Mot de passe</Label>
-              <Input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
-            {error && (
-              <div className="p-3 text-sm bg-destructive/10 text-destructive rounded-md">
-                {error}
-              </div>
-            )}
-            <Button type="submit" className="w-full" disabled={isLoading}>
-              {isLoading ? "Connexion en cours..." : "Se connecter"}
-            </Button>
-          </form>
-        </CardContent>
-        <CardFooter className="flex justify-center">
-          <p className="text-sm text-muted-foreground">
-            Global IoT Intelligence Platform
-          </p>
-        </CardFooter>
-      </Card>
+    <div className="flex min-h-screen items-center justify-center bg-gray-100">
+      <div className="w-full max-w-md rounded-lg bg-white p-8 shadow-md">
+        <h1 className="mb-6 text-2xl font-bold text-center">AFRIXORA</h1>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <input
+            type="email"
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+          />
+          <input
+            type="password"
+            placeholder="Mot de passe"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+          />
+          {error && <p className="text-red-500 text-sm">{error}</p>}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {loading ? "Connexion..." : "Se connecter"}
+          </button>
+        </form>
+      </div>
     </div>
   );
-};
-
-export default LoginPage;
+}

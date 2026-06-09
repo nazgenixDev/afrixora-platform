@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import api from "@/lib/api";
+import logger from "@/lib/logger";
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine
@@ -30,8 +31,10 @@ const EnergyPage = () => {
   useEffect(() => {
     (async () => {
       const res = await api.get("/api/v1/buildings");
-      setBuildings(res.data || []);
-      if (res.data?.length) setSelectedBuilding(res.data[0].id);
+      const raw = res.data;
+      const buildingList = Array.isArray(raw) ? raw : (raw?.data ?? []);
+      setBuildings(buildingList);
+      if (buildingList.length > 0) setSelectedBuilding(buildingList[0].id);
     })();
   }, []);
 
@@ -39,7 +42,7 @@ const EnergyPage = () => {
     if (!selectedBuilding) return;
     (async () => {
       try {
-        setData(prev => ({ ...prev, isLoading: true }));
+        setData((prev: any) => ({ ...prev, isLoading: true }));
         const [sumRes, consRes, devRes, zoneRes] = await Promise.all([
           api.get(`/api/v1/energy/summary?buildingId=${selectedBuilding}&period=${period}`),
           api.get(`/api/v1/energy/consumption?buildingId=${selectedBuilding}&period=${period}`),
@@ -64,7 +67,7 @@ const EnergyPage = () => {
           error: null,
         });
       } catch (err) {
-        setData(prev => ({ ...prev, isLoading: false, error: "Erreur de chargement" }));
+        setData((prev) => ({ ...prev, isLoading: false, error: "Erreur de chargement" }));
       }
     })();
   }, [selectedBuilding, period]);
@@ -125,7 +128,7 @@ const EnergyPage = () => {
     link.remove();
     window.URL.revokeObjectURL(url);
   } catch (err) {
-    console.error('Erreur export CSV:', err);
+    logger.error('Erreur export CSV', err);
   }
 }}>
   📤 Exporter

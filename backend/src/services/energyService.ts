@@ -1,18 +1,46 @@
 import { query } from '../utils/database';
 
 export class EnergyService {
-  async getReadings(tenantId: string, deviceId: string, from: string, to: string, metric: string) {
-    const result = await query(
-      `SELECT time, value, unit
-       FROM sensor_readings
-       WHERE device_id = $1::uuid
-         AND tenant_id = $2::uuid
-         AND metric = $3
-         AND time BETWEEN $4 AND $5
-       ORDER BY time ASC`,
-      [deviceId, tenantId, metric, from, to]
-    );
-    return result.rows;
+  async getReadings(
+    tenantId: string,
+    deviceId: string,
+    from: string,
+    to: string,
+    metric: string,
+    pagination: { page: number; limit: number } = { page: 1, limit: 100 }
+  ) {
+    const { page, limit } = pagination;
+    const offset = (page - 1) * limit;
+
+    const [dataResult, countResult] = await Promise.all([
+      query(
+        `SELECT time, value, unit
+         FROM sensor_readings
+         WHERE device_id = $1::uuid
+           AND tenant_id = $2::uuid
+           AND metric = $3
+           AND time BETWEEN $4 AND $5
+         ORDER BY time ASC
+         LIMIT $6 OFFSET $7`,
+        [deviceId, tenantId, metric, from, to, limit, offset]
+      ),
+      query(
+        `SELECT COUNT(*) as total
+         FROM sensor_readings
+         WHERE device_id = $1::uuid
+           AND tenant_id = $2::uuid
+           AND metric = $3
+           AND time BETWEEN $4 AND $5`,
+        [deviceId, tenantId, metric, from, to]
+      ),
+    ]);
+
+    return {
+      data: dataResult.rows,
+      total: parseInt(countResult.rows[0]?.total || '0', 10),
+      page,
+      totalPages: Math.ceil(parseInt(countResult.rows[0]?.total || '0', 10) / limit),
+    };
   }
 
   async getConsumption(tenantId: string, buildingId: string, period: string) {

@@ -1,6 +1,6 @@
 import { Server } from 'socket.io';
 import { prisma } from '../utils/database';
-import { getMqttClient } from './mqttWorker';
+import { publishMqtt } from './mqttWorker';
 import logger from '../utils/logger';
 
 /**
@@ -93,9 +93,9 @@ export const evaluate = async (
           
           if (action.type === 'DEVICE_COMMAND') {
             // Send command to device via MQTT
-            getMqttClient().publish(
+            publishMqtt(
               `afrixora/${tenantId}/${buildingId}/devices/${action.deviceId}/commands`,
-              JSON.stringify({ command: action.command, params: action.params })
+              { command: action.command, params: action.params }
             );
             
             logger.debug(`Published MQTT command for device ${action.deviceId}`, {
@@ -110,7 +110,7 @@ export const evaluate = async (
                 tenantId,
                 buildingId,
                 deviceId,
-                type: 'AUTOMATION_FIRED',
+                type: 'AUTOMATION',
                 severity: action.severity || 'WARNING',
                 message: action.message || `Règle déclenchée : ${rule.name}`,
                 isRead: false
