@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   postgres:
-    image: timescale/timescaledb:latest-pg15
+    image: timescale/timescaledb-ha:pg15-ts2.15
     restart: unless-stopped
     deploy:
       resources:
