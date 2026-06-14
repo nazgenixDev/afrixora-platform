@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import authenticate from "../middleware/authenticate";
 import { authorize } from "../middleware/authorize";
 import { apiKeyService } from "../services/apiKeyService";
+import { requireApi } from "../middleware/features";
 
 const router = Router();
 
@@ -9,6 +10,7 @@ const router = Router();
 router.get(
   "/",
   authenticate,
+  requireApi,
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -24,6 +26,7 @@ router.get(
 router.post(
   "/",
   authenticate,
+  requireApi,
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -39,6 +42,7 @@ router.post(
 router.patch(
   "/:id/toggle",
   authenticate,
+  requireApi,
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
