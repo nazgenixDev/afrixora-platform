@@ -211,6 +211,52 @@ router.delete(
   }
 );
 
+// Modifier son propre profil (nom, email)
+const updateProfileSchema = z.object({
+  body: z.object({
+    name: z.string().min(1, "Nom requis").optional(),
+    email: z.string().email("Email invalide").optional(),
+  }),
+});
+
+router.patch(
+  "/me",
+  authenticate,
+  validate(updateProfileSchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { name, email } = req.body;
+      const data: Record<string, string> = {};
+      if (name !== undefined) data.name = name;
+      if (email !== undefined) data.email = email;
+
+      if (Object.keys(data).length === 0) {
+        return res.status(400).json({ error: "Aucune donnée à modifier" });
+      }
+
+      // Vérifier unicité email si modifié
+      if (email) {
+        const existing = await prisma.user.findFirst({
+          where: { email, id: { not: req.user!.userId } },
+        });
+        if (existing) {
+          return res.status(409).json({ error: "Cet email est déjà utilisé" });
+        }
+      }
+
+      const updated = await prisma.user.update({
+        where: { id: req.user!.userId },
+        data,
+        select: { id: true, email: true, name: true, role: true, tenantId: true },
+      });
+
+      return res.json({ user: updated });
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
 // Changer son propre mot de passe
 router.patch(
   "/change-password",

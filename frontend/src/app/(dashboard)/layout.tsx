@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
+import { useTheme } from "next-themes";
 import {
   Home, Building2, Cpu, Zap, Workflow, Bell, FileText, Menu, Users, Settings, X, Globe, Briefcase, CreditCard, ChevronLeft, ChevronRight
 } from "lucide-react";
@@ -48,6 +49,8 @@ const DashboardLayout = ({
       });
   }, []);
 
+  const { resolvedTheme } = useTheme();
+  const logoSidebar = resolvedTheme === "dark" ? "/afrixora_logo3.png" : "/iconAfrixora.svg";
   const closeMobileMenu = () => setMobileMenuOpen(false);
 
   const baseNav = [
@@ -87,7 +90,7 @@ const DashboardLayout = ({
       <div className={`flex items-center justify-between p-4 border-b border-border/50 ${sidebarCollapsed ? "flex-col gap-2" : ""}`}>
         <div className={`flex items-center gap-2 ${sidebarCollapsed ? "flex-col" : ""}`}>
           <div className="w-10 h-10 flex items-center justify-center flex-shrink-0">
-            <img src="/iconAfrixora.svg" alt="AFRIXORA" className="w-full h-full object-contain" />
+            <img src={logoSidebar} alt="AFRIXORA" className="w-full h-full object-contain" />
           </div>
           {!sidebarCollapsed && (
             <span className="text-lg font-bold tracking-tight bg-gradient-to-r from-brand-400 to-brand-600 bg-clip-text text-transparent">
@@ -195,7 +198,7 @@ const DashboardLayout = ({
             {/* Mobile logo */}
             <div className="md:hidden flex items-center gap-2">
               <div className="w-9 h-9 flex items-center justify-center">
-                <img src="/iconAfrixora.svg" alt="AFRIXORA" className="w-full h-full object-contain" />
+                <img src={logoSidebar} alt="AFRIXORA" className="w-full h-full object-contain" />
               </div>
               <span className="text-sm font-bold">AFRIXORA</span>
             </div>

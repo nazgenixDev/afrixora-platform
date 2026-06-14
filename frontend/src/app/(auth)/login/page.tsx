@@ -1,14 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Mail, Lock, Loader2, Eye, EyeOff } from "lucide-react";
+import { useTheme } from "next-themes";
 import Image from "next/image";
 
 export default function LoginPage() {
+  const [mounted, setMounted] = useState(false);
+  const { resolvedTheme, theme } = useTheme();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -16,6 +19,13 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const currentTheme = mounted ? (resolvedTheme || theme) : "light";
+  const logoSrc = currentTheme === "dark" ? "/afrixora_logo2.png" : "/afrixora_logo1.png";
 
   const validateEmail = (value: string) => {
     if (value.length === 0) {
@@ -74,15 +84,20 @@ export default function LoginPage() {
       <div className="w-full max-w-md animate-fade-in-up">
         <div className="flex items-center justify-center mb-8">
           <div className="flex items-center gap-3">
-            <div className="relative w-52 h-16">
-              <Image
-                src="/afrixora_logo1.svg"
-                alt="AFRIXORA"
-                fill
-                className="object-contain"
-                priority
-              />
-            </div>
+            {mounted ? (
+              <div className="relative w-64 h-24">
+                <Image
+                  src={logoSrc}
+                  alt="AFRIXORA"
+                  fill
+                  className="object-contain"
+                  priority
+                  unoptimized={logoSrc.endsWith(".png")}
+                />
+              </div>
+            ) : (
+              <div className="w-64 h-24" />
+            )}
           </div>
         </div>
 
