@@ -1,4 +1,6 @@
 "use client";
+import { useSubscriptionLimits } from "@/hooks/useSubscriptionLimits";
+import { useRouter } from "next/navigation";
 
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
@@ -13,6 +15,9 @@ interface Building {
 }
 
 const ReportsPage = (): JSX.Element => {
+  const { limits, loading: limitsLoading } = useSubscriptionLimits();
+  const router = useRouter();
+
   const [buildings, setBuildings] = useState<Building[]>([]);
   const [selectedBuilding, setSelectedBuilding] = useState<string>("");
   const [period, setPeriod] = useState<string>("30d");
@@ -61,7 +66,14 @@ const ReportsPage = (): JSX.Element => {
     }
   };
 
-  if (isLoading) {
+  // Rediriger si le plan ne permet pas l'export
+  useEffect(() => {
+    if (!limitsLoading && limits && !limits.hasExport) {
+      router.push("/");
+    }
+  }, [limits, limitsLoading, router]);
+
+  if (isLoading || limitsLoading) {
     return (
       <div className="flex items-center justify-center h-64">
         <p className="text-muted-foreground">Chargement...</p>
@@ -110,12 +122,16 @@ const ReportsPage = (): JSX.Element => {
           </div>
 
           <div className="flex gap-4 pt-4">
-            <Button onClick={() => download('csv')} className="bg-emerald-600 hover:bg-emerald-700">
-              📄 Télécharger CSV
-            </Button>
-            <Button onClick={() => download('pdf')} className="bg-emerald-600 hover:bg-emerald-700">
-              📑 Télécharger PDF
-            </Button>
+            {limits?.hasExport && (
+              <>
+                <Button onClick={() => download('csv')} className="bg-emerald-600 hover:bg-emerald-700">
+                  📄 Télécharger CSV
+                </Button>
+                <Button onClick={() => download('pdf')} className="bg-emerald-600 hover:bg-emerald-700">
+                  📑 Télécharger PDF
+                </Button>
+              </>
+            )}
           </div>
         </CardContent>
       </Card>

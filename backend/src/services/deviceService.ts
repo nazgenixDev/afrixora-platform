@@ -1,6 +1,14 @@
 import { prisma } from '../utils/database';
 import { publishMqtt } from './mqttWorker';
 
+export interface DeviceFilters {
+  type?: string;
+  zoneId?: string;
+  isOnline?: boolean;
+  search?: string;
+  page?: number;
+  limit?: number;
+}
 export default {
   async findAll(tenantId: string, filters?: any, pagination?: { page: number; limit: number }) {
     const { page = 1, limit = 50 } = pagination || {};

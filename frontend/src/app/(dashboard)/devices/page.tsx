@@ -1,22 +1,26 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import api from "@/lib/api";
 import logger from "@/lib/logger";
-import { Card } from "@/components/ui/card";
 import useStore from "@/store";
 import type { Device, Building, Zone } from "@/types";
+import { Zap, Wifi, WifiOff, Power, PowerOff, Search, LayoutGrid, List, Plus, Eye, Cpu, Loader2 } from "lucide-react";
 
-const STATS_COLORS = {
-  total: "bg-emerald-500/10 text-emerald-400",
-  online: "bg-green-500/10 text-green-400",
-  offline: "bg-red-500/10 text-red-400",
-  active: "bg-orange-500/10 text-orange-400",
-  power: "bg-blue-500/10 text-blue-400",
+const STATS_COLORS: Record<string, { bg: string; text: string; icon: React.ReactNode }> = {
+  total: { bg: "bg-emerald-100 dark:bg-emerald-500/10", text: "text-emerald-600 dark:text-emerald-400", icon: <Cpu className="w-4 h-4" /> },
+  online: { bg: "bg-green-100 dark:bg-green-500/10", text: "text-green-600 dark:text-green-400", icon: <Wifi className="w-4 h-4" /> },
+  offline: { bg: "bg-red-100 dark:bg-red-500/10", text: "text-red-600 dark:text-red-400", icon: <WifiOff className="w-4 h-4" /> },
+  active: { bg: "bg-orange-100 dark:bg-orange-500/10", text: "text-orange-600 dark:text-orange-400", icon: <Power className="w-4 h-4" /> },
+  power: { bg: "bg-blue-100 dark:bg-blue-500/10", text: "text-blue-600 dark:text-blue-400", icon: <Zap className="w-4 h-4" /> },
 };
 
 const TYPE_BADGES: Record<string, string> = {
@@ -88,12 +92,12 @@ const AddDeviceDialog = ({
           </select>
           <select className="w-full h-9 rounded-md border bg-background px-3 text-sm" value={selectedBuildingId} onChange={e => { onBuildingChange(e.target.value); setZoneId(''); }}>
             <option value="">Bâtiment</option>
-            {buildings.map((b: Building) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            {buildings?.map((b: Building) => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
-          <select className="w-full h-9 rounded-md border bg-background px-3 text-sm" value={zoneId} onChange={e => setZoneId(e.target.value)} disabled={!zones.length}>
+          <select className="w-full h-9 rounded-md border bg-background px-3 text-sm" value={zoneId} onChange={e => setZoneId(e.target.value)} disabled={!zones?.length}>
             <option value="">Aucune zone</option>
             <option value="__none__">—</option>
-            {zones.map((z: Zone) => <option key={z.id} value={z.id}>{z.name}</option>)}
+            {zones?.map((z: Zone) => <option key={z.id} value={z.id}>{z.name}</option>)}
           </select>
           <select className="w-full h-9 rounded-md border bg-background px-3 text-sm" value={protocol} onChange={e => setProtocol(e.target.value)}>
             <option value="MQTT">MQTT</option>

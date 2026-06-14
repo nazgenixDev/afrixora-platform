@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import deviceService from '../services/deviceService';
 import { authenticate } from '../middleware/authenticate';
 import { authorize } from '../middleware/authorize';
+import { checkDeviceLimit } from '../middleware/checkLimits';
 import { validate } from '../middleware/validate';
 import { z } from 'zod';
 
@@ -45,6 +46,7 @@ router.post(
   '/',
   authenticate,
   authorize(['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN', 'OPERATOR']),
+  checkDeviceLimit,
   validate(createDeviceSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {

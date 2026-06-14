@@ -2,6 +2,7 @@ import { Router } from 'express';
 import automationService from '../services/automationService';
 import { authenticate } from '../middleware/authenticate';
 import { authorize } from '../middleware/authorize';
+import { checkAutomationLimit } from '../middleware/checkLimits';
 
 const router = Router();
 
@@ -14,7 +15,7 @@ router.get('/', authenticate, async (req, res, next) => {
   }
 });
 
-router.post('/', authenticate, authorize(['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN']), async (req, res, next) => {
+router.post('/', authenticate, authorize(['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN']), checkAutomationLimit, async (req, res, next) => {
   try {
     const automation = await automationService.create(req.body, req.user!.tenantId);
     res.status(201).json(automation);

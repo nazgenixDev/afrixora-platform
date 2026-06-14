@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import api from "@/lib/api";
 import logger from "@/lib/logger";
 import {
@@ -13,6 +14,22 @@ import {
 } from "recharts";
 
 const COLORS = ["#00C9A7", "#3B82F6", "#FFA726", "#A855F7", "#FF4757", "#22C55E"];
+
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-card border border-border rounded-xl shadow-xl p-3 backdrop-blur-sm">
+        <p className="text-sm font-medium text-foreground mb-1">{label}</p>
+        {payload.map((entry: any, idx: number) => (
+          <p key={idx} className="text-sm" style={{ color: entry.color }}>
+            {entry.name}: <span className="font-semibold">{Number(entry.value).toFixed(1)} kWh</span>
+          </p>
+        ))}
+      </div>
+    );
+  }
+  return null;
+};
 
 const EnergyPage = () => {
   const [period, setPeriod] = useState<string>("7d");
@@ -160,7 +177,7 @@ const EnergyPage = () => {
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
               <XAxis dataKey="time" tick={{ fill: "#9CA3AF", fontSize: 10 }} />
               <YAxis unit="kWh" tick={{ fill: "#9CA3AF", fontSize: 10 }} />
-              <Tooltip />
+              <Tooltip content={<CustomTooltip />} />
               <Legend />
               <ReferenceLine y={period === "24h" ? 5 : 28} stroke="#F97316" strokeDasharray="5 5" />
               <Line type="monotone" dataKey="kwh" stroke="#00C9A7" strokeWidth={2} dot={{ r: 3, fill: "#00C9A7" }} activeDot={{ r: 6 }} />

@@ -17,6 +17,8 @@ interface Tenant {
   _count: { buildings: number; users: number };
 }
 
+const PLANS = ["BASIC", "PRO", "BUSINESS", "ENTERPRISE"];
+
 const TenantsPage = (): JSX.Element => {
   const user = useStore(state => state.user);
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -26,6 +28,9 @@ const TenantsPage = (): JSX.Element => {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [form, setForm] = useState({ name: "", slug: "", plan: "CORE", adminEmail: "", adminName: "", adminPassword: "" });
   const [createError, setCreateError] = useState<string | null>(null);
+  const [planChangeTarget, setPlanChangeTarget] = useState<Tenant | null>(null);
+  const [planChangeValue, setPlanChangeValue] = useState<string>("");
+  const [planChangeLoading, setPlanChangeLoading] = useState(false);
 
   const fetchTenants = async () => {
     try { const res = await api.get("/api/v1/tenants"); const raw = res.data; setTenants(Array.isArray(raw) ? raw : (raw?.data ?? [])); } catch (err) { logger.error(String(err)); } finally { setLoading(false); }
@@ -49,6 +54,21 @@ const TenantsPage = (): JSX.Element => {
     catch (err) { logger.error(String(err)); } finally { setDeleteLoading(false); }
   };
 
+  const handlePlanChange = async () => {
+    if (!planChangeTarget || !planChangeValue) return;
+    setPlanChangeLoading(true);
+    try {
+      await api.patch(`/api/v1/tenants/${planChangeTarget.id}/plan`, { plan: planChangeValue });
+      setTenants(prev => prev.map(t => (t.id === planChangeTarget.id ? { ...t, plan: planChangeValue } : t)));
+      setPlanChangeTarget(null);
+      setPlanChangeValue("");
+    } catch (err) {
+      logger.error(String(err));
+    } finally {
+      setPlanChangeLoading(false);
+    }
+  };
+
   if (!user || user.role !== "SUPER_ADMIN") return <div className="flex items-center justify-center h-64"><p className="text-muted-foreground">Accès réservé au Super Administrateur</p></div>;
   if (loading) return <div className="flex items-center justify-center h-64">Chargement...</div>;
 
@@ -66,12 +86,24 @@ const TenantsPage = (): JSX.Element => {
       </div>
       <Card><CardContent className="p-0">
         <table className="w-full text-sm">
-          <thead className="bg-muted/50"><tr><th className="p-3 text-left">Nom</th><th className="p-3 text-left">Slug</th><th className="p-3 text-left">Plan</th><th className="p-3 text-left">Bâtiments</th><th className="p-3 text-left">Utilisateurs</th><th className="p-3 text-left">Statut</th><th className="p-3 text-left">Créé le</th><th className="p-3 text-left">Actions</th></tr></thead>
+          <thead className="bg-muted/50"><tr><th className="p-3 text-left">Nom</th><th className="p-3 text-left">Slug</th><th className="p-3 text-left">Plan</th><th className="p-3 text-left">Changer de plan</th><th className="p-3 text-left">Bâtiments</th><th className="p-3 text-left">Utilisateurs</th><th className="p-3 text-left">Statut</th><th className="p-3 text-left">Créé le</th><th className="p-3 text-left">Actions</th></tr></thead>
           <tbody>
             {tenants.map(t => (
               <tr key={t.id} className="border-t hover:bg-muted/20">
                 <td className="p-3 font-medium">{t.name}</td><td className="p-3 text-muted-foreground font-mono text-xs">{t.slug}</td>
-                <td className="p-3"><Badge variant="outline" className={t.plan==="ENTERPRISE"?"text-purple-400":t.plan==="COMFORT"?"text-blue-400":"text-emerald-400"}>{t.plan}</Badge></td>
+                <td className="p-3"><Badge variant="outline" className={t.plan==="ENTERPRISE"?"text-purple-400":t.plan==="PRO"?"text-blue-400":"text-emerald-400"}>{t.plan}</Badge></td>
+                <td className="p-3">
+                  <Select value={t.plan} onValueChange={(v) => { setPlanChangeTarget(t); setPlanChangeValue(v); }}>
+                    <SelectTrigger className="h-8 text-xs w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PLANS.map(p => (
+                        <SelectItem key={p} value={p}>{p}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </td>
                 <td className="p-3">{t._count?.buildings||0}</td><td className="p-3">{t._count?.users||0}</td>
                 <td className="p-3"><Badge variant={t.isActive?"default":"destructive"}>{t.isActive?"Actif":"Inactif"}</Badge></td>
                 <td className="p-3 text-xs text-muted-foreground">{new Date(t.createdAt).toLocaleDateString()}</td>
@@ -86,6 +118,24 @@ const TenantsPage = (): JSX.Element => {
           </tbody>
         </table>
       </CardContent></Card>
+
+      {/* Dialog confirmation changement de plan */}
+      <Dialog open={!!planChangeTarget} onOpenChange={() => { setPlanChangeTarget(null); setPlanChangeValue(""); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Changer le plan</DialogTitle>
+            <DialogDescription>
+              Êtes-vous sûr de vouloir changer le plan de <strong>{planChangeTarget?.name}</strong> ({planChangeTarget?.slug}) vers <strong>{planChangeValue}</strong> ?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={() => { setPlanChangeTarget(null); setPlanChangeValue(""); }}>Annuler</Button>
+            <Button onClick={handlePlanChange} disabled={planChangeLoading}>
+              {planChangeLoading ? "Changement..." : "Confirmer le changement"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Dialog ajouter */}
       <Dialog open={showAdd} onOpenChange={setShowAdd}>
