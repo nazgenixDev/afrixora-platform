@@ -8,10 +8,12 @@ const api = axios.create({
 
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem("afrixora_token");
-    console.log("Token from localStorage:", token);
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+    if (typeof window !== "undefined") {
+      const token = localStorage.getItem("afrixora_token");
+      console.log("[api] Token from localStorage:", token ? "present" : "missing");
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
     }
     return config;
   },

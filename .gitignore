@@ -33,4 +33,7 @@ coverage/
 # Backups
 .env.backup
 .env.backup.*
-backups/
+backups/*.bak
+task_progress.md
+*.bak
+task_progress.md
