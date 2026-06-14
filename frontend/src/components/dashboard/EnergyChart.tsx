@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Zap } from 'lucide-react';
 
 export interface EnergyChartData {
   bucket: string;
@@ -21,6 +22,25 @@ interface EnergyChartProps {
   period: string;
   className?: string;
 }
+
+/**
+ * Custom tooltip with modern styling
+ */
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-card border border-border rounded-xl shadow-xl p-3 backdrop-blur-sm">
+        <p className="text-sm font-medium text-foreground mb-1">{label}</p>
+        {payload.map((entry: any, idx: number) => (
+          <p key={idx} className="text-sm" style={{ color: entry.color }}>
+            {entry.name}: <span className="font-semibold">{Number(entry.value).toFixed(2)} kWh</span>
+          </p>
+        ))}
+      </div>
+    );
+  }
+  return null;
+};
 
 /**
  * Energy consumption chart component using Recharts
@@ -74,56 +94,49 @@ const EnergyChart: React.FC<EnergyChartProps> = ({ data, period, className }) =>
     }
   };
 
-  // Custom tooltip component
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-white p-3 border rounded shadow-md">
-          <p className="font-medium">{formatTooltipLabel(label)}</p>
-          <p className="text-emerald-600">
-            {`Consommation: ${payload[0].value.toFixed(2)} kWh`}
-          </p>
-        </div>
-      );
-    }
-    return null;
-  };
-
   return (
     <Card className={className}>
-      <CardHeader>
+      <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle>Consommation d'énergie</CardTitle>
+        <Zap className="w-4 h-4 text-brand-500" />
       </CardHeader>
       <CardContent>
         <div className="h-80">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart
-              data={data}
-              margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-            >
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis 
-                dataKey="bucket" 
-                tickFormatter={formatXAxis}
-                tick={{ fill: '#6b7280', fontSize: 12 }}
-              />
-              <YAxis 
-                unit=" kWh"
-                tick={{ fill: '#6b7280', fontSize: 12 }}
-              />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend />
-              <Line
-                type="monotone"
-                dataKey="total_kwh"
-                name="Consommation (kWh)"
-                stroke="#10b981"
-                strokeWidth={2}
-                dot={{ r: 3 }}
-                activeDot={{ r: 6 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          {data.length > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart
+                data={data}
+                margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis 
+                  dataKey="bucket" 
+                  tickFormatter={formatXAxis}
+                  tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
+                />
+                <YAxis 
+                  unit=" kWh"
+                  tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
+                />
+                <Tooltip content={<CustomTooltip />} />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="total_kwh"
+                  name="Consommation"
+                  stroke="#1a94d5"
+                  strokeWidth={2}
+                  dot={{ r: 3, fill: '#1a94d5' }}
+                  activeDot={{ r: 6 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex items-center justify-center h-full flex-col gap-2 text-muted-foreground">
+              <Zap className="w-8 h-8" />
+              <span>Aucune donnée de consommation</span>
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>

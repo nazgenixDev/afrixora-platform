@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import KpiCard from "@/components/dashboard/KpiCard";
 import api from "@/lib/api";
 import logger from "@/lib/logger";
 import type { Device, Building, Alert, EnergySummary, ConsumptionBucket, ZoneBucket } from "@/types";
@@ -14,6 +15,7 @@ import {
   LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine
 } from "recharts";
+import { Zap, BarChart3, Cpu, AlertTriangle, Building2, Activity, RefreshCw } from "lucide-react";
 
 interface DashboardData {
   energySummary: EnergySummary | null;
@@ -27,6 +29,23 @@ interface DashboardData {
 }
 
 const COLORS = ["#00C9A7", "#3B82F6", "#FFA726", "#A855F7", "#FF4757", "#22C55E"];
+
+// Custom Tooltip personnalisé
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-card border rounded-xl shadow-lg p-3 backdrop-blur-sm">
+        <p className="text-sm font-medium mb-1">{label}</p>
+        {payload.map((entry: any, idx: number) => (
+          <p key={idx} className="text-sm" style={{ color: entry.color }}>
+            {entry.name}: <span className="font-semibold">{entry.value.toFixed(1)} kWh</span>
+          </p>
+        ))}
+      </div>
+    );
+  }
+  return null;
+};
 
 const DashboardPage = () => {
   const [buildings, setBuildings] = useState<Building[]>([]);
@@ -146,24 +165,44 @@ const DashboardPage = () => {
     }
   }, [user, impersonatedTenantId]);
 
-  // Tous les hooks sont exécutés avant tout return conditionnel
-  // pour éviter l'erreur "Rendered fewer hooks than expected"
-
-  if (data.noBuilding) {
+  // Loading state
+  if (data.isLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center space-y-3">
-          <p className="text-muted-foreground">Aucun bâtiment enregistré.</p>
-          <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => window.location.href = "/buildings"}>
-            Ajouter un bâtiment
-          </Button>
+      <div className="space-y-6 animate-fade-in">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="skeleton h-8 w-48 mb-2" />
+            <div className="skeleton h-4 w-32" />
+          </div>
+          <div className="skeleton h-10 w-44 rounded-lg" />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[1,2,3,4].map(i => (
+            <div key={i} className="skeleton h-32 rounded-xl" />
+          ))}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 skeleton h-80 rounded-xl" />
+          <div className="skeleton h-80 rounded-xl" />
         </div>
       </div>
     );
   }
 
-  if (data.isLoading) {
-    return <div className="flex items-center justify-center h-64 text-muted-foreground">Chargement...</div>;
+  if (data.noBuilding) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center space-y-4 animate-fade-in-up">
+          <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mx-auto">
+            <Building2 className="w-8 h-8 text-muted-foreground" />
+          </div>
+          <p className="text-muted-foreground text-lg">Aucun bâtiment enregistré.</p>
+          <Button className="bg-brand-600 hover:bg-brand-700 shadow-lg shadow-brand-500/25" onClick={() => window.location.href = "/buildings"}>
+            Ajouter un bâtiment
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   if (showSuperAdmin) {
@@ -177,19 +216,20 @@ const DashboardPage = () => {
   const selectedBuildingName = buildings.find(b => b.id === selectedBuilding)?.name || "Bâtiment";
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-in">
       {/* Header avec sélecteur de bâtiment */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">{selectedBuildingName}</h1>
-          <p className="text-muted-foreground">
+          <h1 className="text-2xl font-bold tracking-tight">{selectedBuildingName}</h1>
+          <p className="text-muted-foreground flex items-center gap-1">
+            <Building2 className="w-3.5 h-3.5" />
             {buildings.find(b => b.id === selectedBuilding)?._count?.zones || 0} zones · {totalDevices} appareils
           </p>
         </div>
         <div className="flex items-center gap-2">
           {buildings.length > 1 && (
             <Select value={selectedBuilding} onValueChange={setSelectedBuilding}>
-              <SelectTrigger className="w-56">
+              <SelectTrigger className="w-48">
                 <SelectValue placeholder="Sélectionner un bâtiment" />
               </SelectTrigger>
               <SelectContent>
@@ -199,17 +239,22 @@ const DashboardPage = () => {
               </SelectContent>
             </Select>
           )}
-          <Badge variant="outline" className="animate-pulse text-emerald-400 border-emerald-400/30">
-            ● Gateway connectée
+          <Badge variant="outline" className="gap-1.5 text-emerald-500 border-emerald-500/30 bg-emerald-500/5">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            Live
           </Badge>
         </div>
       </div>
 
       {/* Si aucun appareil */}
       {totalDevices === 0 && (
-        <div className="p-6 border rounded-md bg-muted/10 text-center">
-          <p className="text-muted-foreground">Aucun appareil enregistré pour ce bâtiment.</p>
-          <Button className="mt-3 bg-emerald-600 hover:bg-emerald-700" onClick={() => window.location.href = "/devices"}>
+        <div className="p-8 border-2 border-dashed rounded-xl bg-muted/10 text-center animate-fade-in">
+          <Cpu className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+          <p className="text-muted-foreground mb-3">Aucun appareil enregistré pour ce bâtiment.</p>
+          <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => window.location.href = "/devices"}>
             Ajouter des appareils
           </Button>
         </div>
@@ -217,58 +262,65 @@ const DashboardPage = () => {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="border-t-2 border-t-emerald-500">
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Puissance actuelle</CardTitle></CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{data.energySummary?.avgPowerW?.toFixed(1) || "0"}<span className="text-sm text-muted-foreground"> kW</span></div>
-            <p className="text-xs text-emerald-500 mt-1">↑ +12% vs hier</p>
-          </CardContent>
-        </Card>
-        <Card className="border-t-2 border-t-orange-500">
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Conso. 7 jours</CardTitle></CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{data.energySummary?.totalKwh?.toFixed(1) || "0"}<span className="text-sm text-muted-foreground"> kWh</span></div>
-            <p className="text-xs text-red-500 mt-1">↓ -5% vs prec.</p>
-          </CardContent>
-        </Card>
-        <Card className="border-t-2 border-t-emerald-500">
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Appareils en ligne</CardTitle></CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{onlineDevices}<span className="text-sm text-muted-foreground"> / {totalDevices}</span></div>
-            <p className="text-xs text-muted-foreground mt-1">{totalDevices > 0 ? Math.round((onlineDevices / totalDevices) * 100) : 0}% connectés</p>
-          </CardContent>
-        </Card>
-        <Card className="border-t-2 border-t-red-500">
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Alertes actives</CardTitle></CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-red-500">{activeAlerts}</div>
-            <p className="text-xs text-muted-foreground mt-1">{criticalAlerts} critiques</p>
-          </CardContent>
-        </Card>
+        <KpiCard
+          label="Puissance actuelle"
+          value={data.energySummary?.avgPowerW?.toFixed(1) || "0"}
+          unit="kW"
+          icon={<Zap className="w-4 h-4" />}
+          accentColor="emerald"
+          trend={{ direction: "up", value: "+12% vs hier" }}
+        />
+        <KpiCard
+          label="Conso. 7 jours"
+          value={data.energySummary?.totalKwh?.toFixed(1) || "0"}
+          unit="kWh"
+          icon={<BarChart3 className="w-4 h-4" />}
+          accentColor="blue"
+          trend={{ direction: "down", value: "-5% vs prec." }}
+        />
+        <KpiCard
+          label="Appareils en ligne"
+          value={onlineDevices}
+          unit={`/ ${totalDevices}`}
+          icon={<Cpu className="w-4 h-4" />}
+          accentColor="purple"
+          trend={{ direction: "neutral", value: `${totalDevices > 0 ? Math.round((onlineDevices / totalDevices) * 100) : 0}% connectés` }}
+        />
+        <KpiCard
+          label="Alertes actives"
+          value={activeAlerts}
+          icon={<AlertTriangle className="w-4 h-4" />}
+          accentColor="red"
+          trend={{ direction: criticalAlerts > 0 ? "up" : "neutral", value: `${criticalAlerts} critiques` }}
+        />
       </div>
 
       {/* Graphiques et détails */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
           <Card>
-            <CardHeader><CardTitle>Consommation — 7 derniers jours</CardTitle></CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>Consommation — 7 derniers jours</CardTitle>
+              <Activity className="w-4 h-4 text-muted-foreground" />
+            </CardHeader>
             <CardContent className="h-72">
               {data.consumptionData.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={data.consumptionData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                    <XAxis dataKey="date" tick={{ fill: "#9CA3AF" }} />
-                    <YAxis unit="kWh" tick={{ fill: "#9CA3AF" }} />
-                    <Tooltip />
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                    <XAxis dataKey="date" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
+                    <YAxis unit="kWh" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
+                    <Tooltip content={<CustomTooltip />} />
                     <Legend />
                     <ReferenceLine y={25} stroke="#F97316" strokeDasharray="5 5" />
-                    <Line type="monotone" dataKey="kwh" stroke="#00C9A7" strokeWidth={2} dot={{ r: 3, fill: "#00C9A7" }} activeDot={{ r: 6 }} />
-                    <Line type="monotone" dataKey="threshold" stroke="#F97316" strokeDasharray="5 5" dot={false} />
+                    <Line type="monotone" dataKey="kwh" stroke="#10b981" strokeWidth={2} dot={{ r: 3, fill: "#10b981" }} activeDot={{ r: 6 }} />
+                    <Line type="monotone" dataKey="threshold" stroke="#F97316" strokeDasharray="5 5" dot={false} name="Seuil" />
                   </LineChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="flex items-center justify-center h-full text-muted-foreground">
-                  Aucune donnée de consommation pour ce bâtiment
+                <div className="flex items-center justify-center h-full flex-col gap-2 text-muted-foreground">
+                  <BarChart3 className="w-8 h-8" />
+                  <span>Aucune donnée de consommation</span>
                 </div>
               )}
             </CardContent>
@@ -276,17 +328,25 @@ const DashboardPage = () => {
 
           {totalDevices > 0 && (
             <div>
-              <h3 className="font-semibold mb-3">Appareils IoT</h3>
+              <h3 className="font-semibold mb-3 flex items-center gap-2">
+                <Cpu className="w-4 h-4" />
+                Appareils IoT
+              </h3>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {data.devices.slice(0, 6).map((d: Device) => (
-                  <Card key={d.id} className={`p-3 ${d.config?.state === "on" ? "border-emerald-500/30 bg-emerald-500/5" : ""}`}>
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="w-8 h-8 rounded bg-muted flex items-center justify-center text-xs font-bold">{d.type[0]}</div>
+                  <Card key={d.id} className={`p-4 ${d.config?.state === "on" ? "border-emerald-500/30 bg-gradient-to-br from-emerald-500/5 to-transparent" : ""}`}>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold ${d.config?.state === "on" ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400" : "bg-muted text-muted-foreground"}`}>
+                        {d.type[0]}
+                      </div>
                       <Switch checked={d.config?.state === "on"} />
                     </div>
                     <div className="text-sm font-medium truncate">{d.name}</div>
                     <div className="text-xs text-muted-foreground">{d.zone?.name || "—"}</div>
-                    <div className={`text-xs mt-1 ${d.isOnline ? "text-emerald-400" : "text-red-400"}`}>{d.isOnline ? (d.config?.state === "on" ? "Actif" : "Éteint") : "Hors ligne"}</div>
+                    <div className={`text-xs mt-1.5 flex items-center gap-1 ${d.isOnline ? "text-emerald-500" : "text-red-400"}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${d.isOnline ? "bg-emerald-500" : "bg-red-400"}`} />
+                      {d.isOnline ? (d.config?.state === "on" ? "Actif" : "Éteint") : "Hors ligne"}
+                    </div>
                   </Card>
                 ))}
               </div>
@@ -310,30 +370,42 @@ const DashboardPage = () => {
                 </ResponsiveContainer>
               ) : (
                 <div className="flex items-center justify-center h-full text-muted-foreground">
-                  Aucune donnée de répartition
+                  Aucune donnée
                 </div>
               )}
             </CardContent>
           </Card>
 
           <Card>
-            <CardHeader><CardTitle>Alertes actives</CardTitle></CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>Alertes actives</CardTitle>
+              {activeAlerts > 0 && (
+                <Badge variant="destructive" className="text-xs">{activeAlerts}</Badge>
+              )}
+            </CardHeader>
             <CardContent>
               {data.alerts.filter((a: Alert) => !a.isRead).length > 0 ? (
                 data.alerts.filter((a: Alert) => !a.isRead).slice(0, 3).map((a: Alert) => (
-                  <div key={a.id} className="flex items-start gap-2 py-2 border-b border-border last:border-0">
-                    <Badge className={a.severity === "CRITICAL" ? "bg-red-600" : a.severity === "WARNING" ? "bg-orange-500" : "bg-emerald-600"}>
+                  <div key={a.id} className="flex items-start gap-2 py-2.5 border-b border-border/50 last:border-0">
+                    <Badge className={a.severity === "CRITICAL" ? "bg-red-500" : a.severity === "WARNING" ? "bg-orange-500" : "bg-emerald-500"}>
                       {a.severity === "CRITICAL" ? "CRIT" : a.severity === "WARNING" ? "WARN" : "INFO"}
                     </Badge>
-                    <div className="flex-1">
-                      <p className="text-sm">{a.message}</p>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm truncate">{a.message}</p>
                       <p className="text-xs text-muted-foreground">{new Date(a.createdAt).toLocaleString()}</p>
                     </div>
-                    <Button variant="ghost" size="icon" className="h-6 w-6 text-xs">ACK</Button>
+                    <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground hover:text-foreground">
+                      ACK
+                    </Button>
                   </div>
                 ))
               ) : (
-                <p className="text-sm text-muted-foreground text-center py-4">Aucune alerte active</p>
+                <div className="text-center py-6">
+                  <div className="w-10 h-10 rounded-full bg-emerald-50 dark:bg-emerald-500/10 flex items-center justify-center mx-auto mb-2">
+                    <RefreshCw className="w-5 h-5 text-emerald-500" />
+                  </div>
+                  <p className="text-sm text-muted-foreground">Aucune alerte active</p>
+                </div>
               )}
             </CardContent>
           </Card>
@@ -347,10 +419,10 @@ const DashboardPage = () => {
                   const trigger = automation.trigger as Record<string, unknown> | undefined;
                   const action = automation.action as Record<string, unknown> | undefined;
                   return (
-                    <div key={automation.id as string} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                      <div>
-                        <p className="text-sm font-medium">{automation.name as string}</p>
-                        <p className="text-xs text-muted-foreground">
+                    <div key={automation.id as string} className="flex items-center justify-between py-2.5 border-b border-border/50 last:border-0">
+                      <div className="min-w-0 flex-1 mr-2">
+                        <p className="text-sm font-medium truncate">{automation.name as string}</p>
+                        <p className="text-xs text-muted-foreground truncate">
                           SI {trigger?.metric as string} {trigger?.operator as string} {trigger?.value as string} → {action?.type as string}
                         </p>
                       </div>
@@ -359,7 +431,9 @@ const DashboardPage = () => {
                   );
                 })
               ) : (
-                <p className="text-sm text-muted-foreground text-center py-4">Aucune automatisation configurée</p>
+                <div className="text-center py-6">
+                  <p className="text-sm text-muted-foreground">Aucune automatisation configurée</p>
+                </div>
               )}
             </CardContent>
           </Card>

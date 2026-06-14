@@ -1,51 +1,48 @@
-import React from "react";
+import React from 'react';
+import { Card } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
+import { Cpu, Wifi, WifiOff, Power, Zap } from 'lucide-react';
 
 interface StatsBarProps {
-  total: number;
-  online: number;
-  offline: number;
-  active: number;
-  powerLive: string;
+  stats: {
+    total: number;
+    online: number;
+    offline: number;
+    active: number;
+    power?: string | number;
+  };
+  className?: string;
 }
 
-const StatsBar: React.FC<StatsBarProps> = ({ total, online, offline, active, powerLive }) => {
+const STAT_ITEMS: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
+  total: { label: 'Total', icon: <Cpu className="w-4 h-4" />, color: 'text-emerald-500 bg-emerald-100 dark:bg-emerald-500/10' },
+  online: { label: 'En ligne', icon: <Wifi className="w-4 h-4" />, color: 'text-green-500 bg-green-100 dark:bg-green-500/10' },
+  offline: { label: 'Hors ligne', icon: <WifiOff className="w-4 h-4" />, color: 'text-red-500 bg-red-100 dark:bg-red-500/10' },
+  active: { label: 'Actifs', icon: <Power className="w-4 h-4" />, color: 'text-orange-500 bg-orange-100 dark:bg-orange-500/10' },
+  power: { label: 'Puissance', icon: <Zap className="w-4 h-4" />, color: 'text-blue-500 bg-blue-100 dark:bg-blue-500/10' },
+};
+
+/**
+ * Stats bar displaying device metrics with icons and colors
+ */
+const StatsBar: React.FC<StatsBarProps> = ({ stats, className }) => {
   return (
-    <div className="grid grid-cols-5 gap-2">
-      <div className="bg-card border rounded-lg p-3 flex items-center gap-3">
-        <div className="w-8 h-8 rounded bg-emerald-500/20 flex items-center justify-center text-emerald-500 font-bold">T</div>
-        <div>
-          <div className="text-lg font-bold">{total}</div>
-          <div className="text-xs text-muted-foreground">Total</div>
-        </div>
-      </div>
-      <div className="bg-card border rounded-lg p-3 flex items-center gap-3">
-        <div className="w-8 h-8 rounded bg-green-500/20 flex items-center justify-center text-green-500 font-bold">O</div>
-        <div>
-          <div className="text-lg font-bold text-green-500">{online}</div>
-          <div className="text-xs text-muted-foreground">En ligne</div>
-        </div>
-      </div>
-      <div className="bg-card border rounded-lg p-3 flex items-center gap-3">
-        <div className="w-8 h-8 rounded bg-red-500/20 flex items-center justify-center text-red-500 font-bold">H</div>
-        <div>
-          <div className="text-lg font-bold text-red-500">{offline}</div>
-          <div className="text-xs text-muted-foreground">Hors ligne</div>
-        </div>
-      </div>
-      <div className="bg-card border rounded-lg p-3 flex items-center gap-3">
-        <div className="w-8 h-8 rounded bg-orange-500/20 flex items-center justify-center text-orange-500 font-bold">A</div>
-        <div>
-          <div className="text-lg font-bold text-orange-500">{active}</div>
-          <div className="text-xs text-muted-foreground">Actifs</div>
-        </div>
-      </div>
-      <div className="bg-card border rounded-lg p-3 flex items-center gap-3">
-        <div className="w-8 h-8 rounded bg-blue-500/20 flex items-center justify-center text-blue-500 font-bold">P</div>
-        <div>
-          <div className="text-lg font-bold">{powerLive}</div>
-          <div className="text-xs text-muted-foreground">Puissance live</div>
-        </div>
-      </div>
+    <div className={cn('grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3', className)}>
+      {Object.entries(stats).map(([key, value]) => {
+        const config = STAT_ITEMS[key];
+        if (!config) return null;
+        return (
+          <Card key={key} className="p-4 flex items-center gap-3 transition-all duration-200 hover:shadow-md">
+            <div className={cn('w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0', config.color)}>
+              {config.icon}
+            </div>
+            <div className="min-w-0">
+              <div className="text-lg font-bold tracking-tight">{value ?? '—'}</div>
+              <div className="text-xs text-muted-foreground">{config.label}</div>
+            </div>
+          </Card>
+        );
+      })}
     </div>
   );
 };
