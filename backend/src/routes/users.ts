@@ -149,20 +149,33 @@ router.patch(
   }
 );
 
-// Changer le rôle (admin)
-router.patch(
-  "/:id/role",
-  authenticate,
-  authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
-  validate(changeRoleSchema),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { role } = req.body;
-      const updated = await prisma.user.update({ where: { id: req.params.id }, data: { role } });
-      return res.json({ id: updated.id, role: updated.role });
-    } catch (err) { return next(err); }
+// PATCH /users/:id/role - change user role (admin only)
+router.patch('/:id/role', authenticate, authorize(['SUPER_ADMIN', 'TENANT_ADMIN']), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { role } = req.body;
+    const validRoles = ['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN', 'OPERATOR', 'VIEWER'];
+    if (!role || !validRoles.includes(role)) {
+      return res.status(400).json({ error: 'Rôle invalide' });
+    }
+
+    // 🔐 IMPORTANT : restreindre au même tenant
+    const targetUser = await prisma.user.findFirst({
+      where: { id, tenantId: req.user!.tenantId },
+    });
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found in this tenant' });
+    }
+
+    const updated = await prisma.user.update({
+      where: { id, tenantId: req.user!.tenantId },
+      data: { role },
+    });
+    res.json(updated);
+  } catch (error) {
+    next(error);
   }
-);
+});
 
 // Réinitialiser le mot de passe d'un utilisateur (admin)
 router.patch(

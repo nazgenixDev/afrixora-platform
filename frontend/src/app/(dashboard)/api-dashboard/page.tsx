@@ -1,6 +1,8 @@
 "use client";
+import { useSubscriptionLimits } from "@/hooks/useSubscriptionLimits";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +29,9 @@ interface MonitoringStats {
 }
 
 const ApiDashboardPage = (): JSX.Element => {
+  const { limits, loading: limitsLoading } = useSubscriptionLimits();
+  const router = useRouter();
+
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [logs, setLogs] = useState<ApiLog[]>([]);
   const [stats, setStats] = useState<MonitoringStats | null>(null);
@@ -41,6 +46,13 @@ const ApiDashboardPage = (): JSX.Element => {
   const [filterMethod, setFilterMethod] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterEndpoint, setFilterEndpoint] = useState("");
+
+  // Rediriger si le plan ne donne pas accès à l'API
+  useEffect(() => {
+    if (!limitsLoading && limits && !limits.hasApi) {
+      router.push("/");
+    }
+  }, [limits, limitsLoading, router]);
 
   const fetchKeys = async () => {
     const res = await api.get("/api/v1/api-keys");
@@ -85,7 +97,7 @@ const ApiDashboardPage = (): JSX.Element => {
     fetchKeys();
   };
 
-  if (loading) return <div className="flex items-center justify-center h-64">Chargement...</div>;
+  if (loading || limitsLoading) return <div className="flex items-center justify-center h-64">Chargement...</div>;
 
   return (
     <div className="space-y-6">

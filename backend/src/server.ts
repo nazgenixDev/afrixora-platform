@@ -49,7 +49,6 @@ io.adapter(createAdapter(redisClient, redisClient.duplicate()));
 
 app.use(helmet());
 app.set("trust proxy", true);
-app.set("trust proxy", true);
 app.use(cors({
   origin: process.env.CORS_ORIGINS?.split(',') || 'http://localhost:3000',
   credentials: true
