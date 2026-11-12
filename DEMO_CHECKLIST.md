@@ -7,8 +7,13 @@
 - [ ] Le backend démarre sans erreur (`cd backend && npm run dev`)
 - [ ] Le frontend démarre sans erreur (`cd frontend && npm run dev`)
 - [ ] Les données de démo sont injectées (script start-demo.sh)
-- [ ] Login fonctionne : admin@afrixora.cd / Admin123!
+- [ ] Login fonctionne : admin@afrixora.cd (mot de passe : voir .env / seed)
 - [ ] Le dashboard affiche les KPIs et graphiques
+
+> ⚠️ **Le compte de démo ne doit jamais exister en production.**
+> Il sert uniquement aux démonstrations locales. Avant toute mise en ligne,
+> vérifier qu'aucun utilisateur de démo n'est présent en base et utiliser un
+> compte administrateur réel avec un mot de passe unique et fort.
 
 ## Scénario de démonstration (10 minutes)
 

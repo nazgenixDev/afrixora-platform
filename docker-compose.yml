@@ -93,6 +93,9 @@ services:
       - DOMAIN=${DOMAIN}
       - CORS_ORIGINS=${CORS_ORIGINS}
       - ENERGY_COST_PER_KWH=${ENERGY_COST_PER_KWH}
+      # Mot de passe du compte admin créé par `prisma db seed`.
+      # Obligatoire en production : le seed refuse de s'exécuter sinon.
+      - SEED_ADMIN_PASSWORD=${SEED_ADMIN_PASSWORD}
     depends_on:
       postgres:
         condition: service_healthy

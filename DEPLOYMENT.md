@@ -93,11 +93,21 @@ docker compose logs -f frontend
 docker compose exec api npx prisma migrate deploy
 
 # Créer les données initiales (tenant, admin, building, devices)
+# Le mot de passe admin est lu depuis SEED_ADMIN_PASSWORD (voir .env / seed).
+# En production (NODE_ENV=production), le seed REFUSE de s'exécuter si la
+# variable est absente.
 docker compose exec api npx prisma db seed
 
 # Vérifier l'API
 curl https://api.afrixora.cd/health
 ```
+
+> ⚠️ **Le compte de démonstration ne doit jamais exister en production.**
+> Ne lancez `prisma db seed` en production que pour créer un administrateur
+> réel, avec un `SEED_ADMIN_PASSWORD` fort et unique, puis changez ce mot de
+> passe à la première connexion. Un compte de démo (`admin@afrixora.cd` avec
+> un mot de passe public) sur un serveur de production est une compromission
+> immédiate.
 
 ---
 
@@ -140,7 +150,8 @@ docker compose down
 
 - [ ] `curl https://api.afrixora.cd/health` → `{"status":"ok"}`
 - [ ] `curl https://afrixora.cd` → page de login
-- [ ] Connexion avec `admin@afrixora.cd` / `Admin123!`
+- [ ] Connexion avec `admin@afrixora.cd` (mot de passe : voir .env / seed)
+- [ ] ⚠️ Le compte de démo ne doit jamais exister en production — utiliser un compte administrateur réel avec un mot de passe unique
 - [ ] Dashboard affiche les bâtiments et devices
 - [ ] Grafana accessible
 - [ ] Backup automatique configuré

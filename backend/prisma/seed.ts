@@ -3,9 +3,37 @@ import bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
 
+// Mot de passe du compte admin de démonstration.
+// - En production : obligatoire via SEED_ADMIN_PASSWORD (aucun défaut).
+// - En développement : défaut documenté, jamais à réutiliser en production.
+const DEV_DEFAULT_ADMIN_PASSWORD = 'Admin123!';
+
+function resolveAdminPassword(): string {
+  const fromEnv = process.env.SEED_ADMIN_PASSWORD;
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (!fromEnv) {
+    if (isProduction) {
+      throw new Error(
+        'SEED_ADMIN_PASSWORD est absent : refus de créer le compte admin en production. ' +
+          'Définissez SEED_ADMIN_PASSWORD dans .env avant d’exécuter le seed.'
+      );
+    }
+    return DEV_DEFAULT_ADMIN_PASSWORD;
+  }
+
+  if (isProduction && fromEnv === 'CHANGE_ME') {
+    throw new Error(
+      'SEED_ADMIN_PASSWORD vaut encore CHANGE_ME : refus de créer le compte admin en production.'
+    );
+  }
+
+  return fromEnv;
+}
+
 async function main() {
   const adminEmail = 'admin@afrixora.cd';
-  const adminPassword = 'Admin123!';
+  const adminPassword = resolveAdminPassword();
   const hash = bcrypt.hashSync(adminPassword, 10);
 
   // Créer un tenant par défaut avec plan BASIC
@@ -42,6 +70,13 @@ async function main() {
   }
 }
 
+// Le seed doit échouer avec un code non nul en cas de refus (ex. production
+// sans SEED_ADMIN_PASSWORD) pour bloquer un script de déploiement.
+// console.error est volontairement conservé ici : ce fichier s'exécute hors du
+// serveur (CLI Prisma) et le logger Winston n'y est pas initialisé.
 main()
-  .catch(e => console.error(e))
+  .catch(e => {
+    console.error(e);
+    process.exitCode = 1;
+  })
   .finally(async () => await prisma.$disconnect());

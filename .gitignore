@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+!.env.demo.example
+.env.demo
 backend/.env
 frontend/.env
 
@@ -34,6 +36,8 @@ coverage/
 .env.backup
 .env.backup.*
 backups/*.bak
-task_progress.md
+*.save
+*.backup
 *.bak
+*.orig
 task_progress.md

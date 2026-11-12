@@ -21,7 +21,10 @@ export const apiKeyService = {
   },
 
   async create(tenantId: string, data: { name: string; scope?: string }) {
-    const key = `nxa_live_${crypto.randomBytes(16).toString("hex")}`;
+    // Préfixe `afrx_live_` pour les nouvelles clés.
+    // Les anciennes clés `nxa_live_` restent valides : apiKeyAuth.ts les accepte
+    // encore telles quelles (aucune migration ni invalidation dans ce lot).
+    const key = `afrx_live_${crypto.randomBytes(16).toString("hex")}`;
     return prisma.apiKey.create({
       data: {
         tenantId,
