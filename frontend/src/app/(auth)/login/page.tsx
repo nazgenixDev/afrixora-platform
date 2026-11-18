@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { isAxiosError } from "axios";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Mail, Lock, Loader2, Eye, EyeOff } from "lucide-react";
 import { useTheme } from "next-themes";
 import Image from "next/image";
+import api from "@/lib/api";
 
 export default function LoginPage() {
   const [mounted, setMounted] = useState(false);
@@ -58,22 +60,18 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
-      const res = await fetch("http://localhost:4000/api/v1/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json();
-      if (res.ok && data.user) {
-        if (data.accessToken) {
-          localStorage.setItem("afrixora_token", data.accessToken);
-        }
-        window.location.href = "/";
-      } else {
-        setError(data.error || "Erreur de connexion");
+      const { data } = await api.post<{ accessToken?: string }>("/api/v1/auth/login", { email, password });
+      if (process.env.NODE_ENV === "development" && data.accessToken) {
+        localStorage.setItem("afrixora_token", data.accessToken);
       }
-    } catch (err) {
-      setError("Erreur réseau");
+      window.location.href = "/";
+    } catch (err: unknown) {
+      if (isAxiosError<{ error?: unknown }>(err) && err.response) {
+        const message = err.response.data?.error;
+        setError(typeof message === "string" ? message : "Erreur de connexion");
+      } else {
+        setError("Erreur réseau");
+      }
     } finally {
       setLoading(false);
     }

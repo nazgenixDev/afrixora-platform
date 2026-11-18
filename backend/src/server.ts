@@ -37,6 +37,13 @@ import { checkEnv } from './scripts/checkEnv';
 // Vérification critique des variables d'environnement au démarrage
 checkEnv();
 
+const trustProxyHops = z.string().regex(/^\d+$/).transform(Number)
+  .pipe(z.number().int().nonnegative().safe())
+  .safeParse(process.env.TRUST_PROXY_HOPS ?? '1');
+if (!trustProxyHops.success) {
+  throw new Error('TRUST_PROXY_HOPS doit être un entier positif ou nul');
+}
+
 const app = express();
 const server = http.createServer(app);
 
@@ -52,7 +59,7 @@ io.adapter(createAdapter(redisClient, redisClient.duplicate()));
 io.use(socketAuth);
 
 app.use(helmet());
-app.set("trust proxy", true);
+app.set("trust proxy", trustProxyHops.data);
 app.use(cors({
   origin: process.env.CORS_ORIGINS?.split(',') || 'http://localhost:3000',
   credentials: true

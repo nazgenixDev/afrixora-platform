@@ -10,9 +10,17 @@ import logger from '../utils/logger';
 const router = express.Router();
 
 // Rate limiter : 10 tentatives/15min en production, 100 en développement
-const authLimiter = rateLimit({
+const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: process.env.NODE_ENV === 'production' ? 10 : 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Trop de tentatives. Réessayez dans 15 minutes.' },
+});
+
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Trop de tentatives. Réessayez dans 15 minutes.' },
@@ -48,7 +56,7 @@ const REFRESH_COOKIE_OPTIONS = {
  * @desc Authenticate user and get tokens (set as httpOnly cookies)
  * @access Public (rate-limited)
  */
-router.post('/login', authLimiter, validate(loginSchema), async (req, res, next) => {
+router.post('/login', loginLimiter, validate(loginSchema), async (req, res, next) => {
   try {
     const { email, password } = req.body;
     const result = await authService.login(email, password);
@@ -74,19 +82,18 @@ router.post('/login', authLimiter, validate(loginSchema), async (req, res, next)
  * @desc Refresh access token using httpOnly cookie
  * @access Public (rate-limited)
  */
-router.post('/refresh', authLimiter, async (req, res, next) => {
+router.post('/refresh', refreshLimiter, async (req, res, next) => {
   try {
     const refreshToken = req.cookies?.refresh_token;
-    if (!refreshToken) {
-      return res.status(401).json({ error: 'Refresh token not found' });
-    }
-
     const result = await authService.refreshToken(refreshToken);
 
     // Set new access_token cookie
     res.cookie('access_token', result.accessToken, ACCESS_COOKIE_OPTIONS);
 
-    return res.json({ success: true });
+    return res.json({
+      success: true,
+      ...(process.env.NODE_ENV === 'development' ? { accessToken: result.accessToken } : {}),
+    });
   } catch (error) {
     return next(error);
   }
