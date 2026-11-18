@@ -26,9 +26,13 @@ for VAR_NAME in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB DATABASE_URL REDIS_U
                 MQTT_API_USER MQTT_API_PASSWORD JWT_SECRET JWT_REFRESH_SECRET RESEND_API_KEY \
                 DOMAIN ENERGY_COST_PER_KWH PORT CORS_ORIGINS NEXT_PUBLIC_API_URL SEED_ADMIN_PASSWORD; do
     eval "VAR_VALUE=\"\${$VAR_NAME:-}\""
-    if [ -z "$VAR_VALUE" ] || [ "$VAR_VALUE" = "CHANGE_ME" ] || [ "$VAR_VALUE" = "re_CHANGE_ME" ]; then
-        MISSING_VARS="$MISSING_VARS $VAR_NAME"
-    fi
+    # Une valeur vide ou contenant encore CHANGE_ME est refusée (couvre aussi
+    # les cas imbriqués comme DATABASE_URL=postgresql://user:CHANGE_ME@host/db).
+    case "$VAR_VALUE" in
+        ""|*CHANGE_ME*)
+            MISSING_VARS="$MISSING_VARS $VAR_NAME"
+            ;;
+    esac
 done
 
 if [ -n "$MISSING_VARS" ]; then

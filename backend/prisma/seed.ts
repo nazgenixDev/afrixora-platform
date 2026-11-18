@@ -8,7 +8,13 @@ const prisma = new PrismaClient();
 // - En développement : défaut documenté, jamais à réutiliser en production.
 const DEV_DEFAULT_ADMIN_PASSWORD = 'Admin123!';
 
-function resolveAdminPassword(): string {
+interface AdminPasswordResolution {
+  password: string;
+  /** true si SEED_ADMIN_PASSWORD est défini explicitement (pas le défaut dev). */
+  isExplicit: boolean;
+}
+
+function resolveAdminPassword(): AdminPasswordResolution {
   const fromEnv = process.env.SEED_ADMIN_PASSWORD;
   const isProduction = process.env.NODE_ENV === 'production';
 
@@ -19,7 +25,7 @@ function resolveAdminPassword(): string {
           'Définissez SEED_ADMIN_PASSWORD dans .env avant d’exécuter le seed.'
       );
     }
-    return DEV_DEFAULT_ADMIN_PASSWORD;
+    return { password: DEV_DEFAULT_ADMIN_PASSWORD, isExplicit: false };
   }
 
   if (isProduction && fromEnv === 'CHANGE_ME') {
@@ -28,12 +34,12 @@ function resolveAdminPassword(): string {
     );
   }
 
-  return fromEnv;
+  return { password: fromEnv, isExplicit: true };
 }
 
 async function main() {
   const adminEmail = 'admin@afrixora.cd';
-  const adminPassword = resolveAdminPassword();
+  const { password: adminPassword, isExplicit } = resolveAdminPassword();
   const hash = bcrypt.hashSync(adminPassword, 10);
 
   // Créer un tenant par défaut avec plan BASIC
@@ -65,8 +71,21 @@ async function main() {
       },
     });
     console.log('✅ Admin créé');
+  } else if (isExplicit) {
+    // SEED_ADMIN_PASSWORD est la source de vérité : on l'applique à un admin
+    // existant pour qu'un ancien mot de passe documenté (ex. Admin123!) ne
+    // reste jamais valide. jwtVersion est incrémenté pour invalider les
+    // access/refresh tokens déjà émis avec l'ancien mot de passe.
+    await prisma.user.update({
+      where: { id: existingAdmin.id },
+      data: {
+        passwordHash: hash,
+        jwtVersion: { increment: 1 },
+      },
+    });
+    console.log('🔄 Admin existant : mot de passe mis à jour, sessions révoquées');
   } else {
-    console.log('ℹ️ Admin existe déjà');
+    console.log('ℹ️ Admin existe déjà (mot de passe inchangé : défaut de développement)');
   }
 }
 
