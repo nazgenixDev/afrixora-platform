@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { isAxiosError } from "axios";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -45,6 +46,7 @@ const UsersPage = (): JSX.Element => {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [roleError, setRoleError] = useState<{ userId: string; message: string } | null>(null);
   const [form, setForm] = useState({ email: "", name: "", role: "TENANT_ADMIN", password: "" });
 
   const fetchUsers = async () => {
@@ -86,12 +88,19 @@ const UsersPage = (): JSX.Element => {
     }
   };
 
-  const changeRole = async (id: string, role: string) => {
+  const changeRole = async (id: string, role: string): Promise<void> => {
+    setRoleError(null);
     try {
       await api.patch(`/api/v1/users/${id}/role`, { role });
       setUsers(prev => prev.map(u => (u.id === id ? { ...u, role } : u)));
-    } catch (err) {
+    } catch (err: unknown) {
       logger.error(String(err));
+      const response = isAxiosError<{ error?: unknown }>(err) ? err.response : undefined;
+      const message = response?.status === 403 ? response.data?.error : undefined;
+      setRoleError({
+        userId: id,
+        message: typeof message === "string" ? message : "Erreur lors de la modification du rôle.",
+      });
     }
   };
 
@@ -153,6 +162,8 @@ const UsersPage = (): JSX.Element => {
 
   if (loading) return <div className="flex items-center justify-center h-64">Chargement...</div>;
 
+  const assignableRoles = ROLES.filter(role => role.value !== "SUPER_ADMIN" || user.role === "SUPER_ADMIN");
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -184,12 +195,17 @@ const UsersPage = (): JSX.Element => {
                   <td className="p-3 font-medium">{u.name}</td>
                   <td className="p-3 text-muted-foreground">{u.email}</td>
                   <td className="p-3">
-                    <Select defaultValue={u.role} onValueChange={(role) => changeRole(u.id, role)}>
-                      <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                    <Select value={u.role} onValueChange={(role) => changeRole(u.id, role)}>
+                      <SelectTrigger className="w-44">
+                        <SelectValue>{ROLES.find(role => role.value === u.role)?.label ?? u.role}</SelectValue>
+                      </SelectTrigger>
                       <SelectContent>
-                        {ROLES.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
+                        {assignableRoles.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
                       </SelectContent>
                     </Select>
+                    {roleError?.userId === u.id && (
+                      <p role="alert" className="mt-1 text-sm text-destructive">{roleError.message}</p>
+                    )}
                   </td>
                   <td className="p-3">
                     <Badge variant={u.isActive ? "default" : "destructive"}>
@@ -228,7 +244,7 @@ const UsersPage = (): JSX.Element => {
               <Label>Rôle</Label>
               <Select value={form.role} onValueChange={role => setForm({ ...form, role })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{ROLES.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}</SelectContent>
+                <SelectContent>{assignableRoles.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             {createError && <div className="p-3 text-sm bg-red-500/10 text-red-400 rounded-md">{createError}</div>}
