@@ -17,6 +17,7 @@ export const validate = (schema: AnyZodObject) => {
         query: req.query,
         params: req.params,
       });
+      if (parsed.body !== undefined) res.locals.validatedBody = parsed.body;
       if (parsed.query !== undefined) res.locals.validatedQuery = parsed.query;
       return next();
       

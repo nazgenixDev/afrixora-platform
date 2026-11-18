@@ -1,5 +1,8 @@
 import crypto from "crypto";
+import type { ApiKey } from "@prisma/client";
 import prisma from "../utils/database";
+
+export const apiKeyScopes = ["read", "write", "full", "gateway"] as const;
 
 export const apiKeyService = {
   async findAll(tenantId: string) {
@@ -20,7 +23,7 @@ export const apiKeyService = {
     });
   },
 
-  async create(tenantId: string, data: { name: string; scope?: string }) {
+  async create(tenantId: string, data: { name: string; scope: typeof apiKeyScopes[number] }): Promise<ApiKey> {
     // Préfixe `afrx_live_` pour les nouvelles clés.
     // Les anciennes clés `nxa_live_` restent valides : apiKeyAuth.ts les accepte
     // encore telles quelles (aucune migration ni invalidation dans ce lot).
@@ -30,7 +33,7 @@ export const apiKeyService = {
         tenantId,
         name: data.name,
         key,
-        scope: data.scope || "full",
+        scope: data.scope,
       },
     });
   },

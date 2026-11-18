@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { isAxiosError } from "axios";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ interface Tenant {
 }
 
 const PLANS = ["BASIC", "PRO", "BUSINESS", "ENTERPRISE"];
+const INITIAL_TENANT_FORM = { name: "", slug: "", plan: "BASIC", adminEmail: "", adminName: "", adminPassword: "" };
 
 const TenantsPage = (): JSX.Element => {
   const user = useStore(state => state.user);
@@ -26,7 +28,7 @@ const TenantsPage = (): JSX.Element => {
   const [showAdd, setShowAdd] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Tenant | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [form, setForm] = useState({ name: "", slug: "", plan: "CORE", adminEmail: "", adminName: "", adminPassword: "" });
+  const [form, setForm] = useState(INITIAL_TENANT_FORM);
   const [createError, setCreateError] = useState<string | null>(null);
   const [planChangeTarget, setPlanChangeTarget] = useState<Tenant | null>(null);
   const [planChangeValue, setPlanChangeValue] = useState<string>("");
@@ -37,10 +39,18 @@ const TenantsPage = (): JSX.Element => {
   };
   useEffect(() => { fetchTenants(); }, []);
 
-  const handleCreate = async () => {
+  const handleCreate = async (): Promise<void> => {
     if (!form.name || !form.slug || !form.adminEmail || !form.adminName || !form.adminPassword) { setCreateError("Tous les champs sont requis"); return; }
-    try { await api.post("/api/v1/tenants", form); setShowAdd(false); setForm({ name: "", slug: "", plan: "CORE", adminEmail: "", adminName: "", adminPassword: "" }); setCreateError(null); fetchTenants(); }
-    catch (err: any) { setCreateError(err.response?.data?.error || "Erreur"); }
+    try {
+      await api.post("/api/v1/tenants", form);
+      setShowAdd(false);
+      setForm(INITIAL_TENANT_FORM);
+      setCreateError(null);
+      await fetchTenants();
+    } catch (err) {
+      const message = isAxiosError<{ error?: unknown }>(err) && err.response?.data?.error;
+      setCreateError(typeof message === "string" ? message : "Erreur lors de la création du tenant");
+    }
   };
 
   const toggleStatus = async (id: string, isActive: boolean) => {
@@ -143,7 +153,15 @@ const TenantsPage = (): JSX.Element => {
           <DialogHeader><DialogTitle>Nouveau tenant</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3"><div><Label>Nom du client</Label><Input value={form.name} onChange={e => setForm({...form,name:e.target.value})} /></div><div><Label>Slug</Label><Input value={form.slug} onChange={e => setForm({...form,slug:e.target.value})} /></div></div>
-            <div><Label>Plan</Label><Select value={form.plan} onValueChange={v => setForm({...form,plan:v})}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent><SelectItem value="CORE">CORE</SelectItem><SelectItem value="COMFORT">COMFORT</SelectItem><SelectItem value="ENTERPRISE">ENTERPRISE</SelectItem></SelectContent></Select></div>
+            <div>
+              <Label>Plan</Label>
+              <Select value={form.plan} onValueChange={plan => setForm({ ...form, plan })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PLANS.map(plan => <SelectItem key={plan} value={plan}>{plan}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="border-t pt-3"><Label className="mb-2 block">Administrateur</Label><div className="grid grid-cols-2 gap-3"><div><Label className="text-xs">Nom</Label><Input value={form.adminName} onChange={e => setForm({...form,adminName:e.target.value})} /></div><div><Label className="text-xs">Email</Label><Input type="email" value={form.adminEmail} onChange={e => setForm({...form,adminEmail:e.target.value})} /></div></div><div className="mt-2"><Label className="text-xs">Mot de passe</Label><Input type="password" value={form.adminPassword} onChange={e => setForm({...form,adminPassword:e.target.value})} /></div></div>
             {createError && <div className="p-3 text-sm bg-red-500/10 text-red-400 rounded-md">{createError}</div>}
           </div>

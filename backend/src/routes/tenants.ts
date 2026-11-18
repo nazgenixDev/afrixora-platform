@@ -1,14 +1,25 @@
 import { Router } from 'express';
 import { prisma } from '../utils/database';
-import { SubscriptionPlan, SubscriptionStatus, Role } from '@prisma/client';
+import { SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
 import { authenticate } from '../middleware/authenticate';
 import { authorize } from '../middleware/authorize';
 import { getPlanLimits } from '../utils/plans';
-import bcrypt from 'bcryptjs';
+import { createTenant } from '../services/tenantService';
 import logger from '../utils/logger';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { Resend } from 'resend';
+
+const createTenantSchema = z.object({
+  body: z.object({
+    name: z.string().trim().min(1),
+    slug: z.string().regex(/^[a-z0-9-]{3,40}$/),
+    plan: z.nativeEnum(SubscriptionPlan),
+    adminEmail: z.string().email(),
+    adminName: z.string().trim().min(1),
+    adminPassword: z.string().min(8),
+  }).strict(),
+});
 
 const planSchema = z.object({
   body: z.object({
@@ -39,50 +50,11 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN']), async (req, res, next)
 });
 
 // POST /tenants - create a new tenant with admin user (super admin only)
-router.post('/', authenticate, authorize(['SUPER_ADMIN']), async (req, res, next) => {
+router.post('/', authenticate, authorize(['SUPER_ADMIN']), validate(createTenantSchema), async (req, res, next) => {
   try {
-    const { name, slug, plan: frontendPlan = 'CORE', adminEmail, adminName, adminPassword } = req.body;
-    if (!name || !slug || !adminEmail || !adminName || !adminPassword) {
-      return res.status(400).json({ error: 'Missing required fields: name, slug, adminEmail, adminName, adminPassword' });
-    }
-
-    const planMap: Record<string, SubscriptionPlan> = {
-      'CORE': SubscriptionPlan.BASIC,
-      'COMFORT': SubscriptionPlan.PRO,
-      'ENTERPRISE': SubscriptionPlan.ENTERPRISE,
-    };
-    const dbPlan = planMap[frontendPlan] || SubscriptionPlan.BASIC;
-
-    const existingTenant = await prisma.tenant.findUnique({ where: { slug } });
-    if (existingTenant) return res.status(409).json({ error: 'Slug already exists' });
-    const existingUser = await prisma.user.findUnique({ where: { email: adminEmail } });
-    if (existingUser) return res.status(409).json({ error: 'Email already used' });
-
-    const passwordHash = await bcrypt.hash(adminPassword, 10);
-
-    const result = await prisma.$transaction(async (tx) => {
-      const tenant = await tx.tenant.create({
-        data: {
-          name,
-          slug,
-          plan: dbPlan,
-          subscriptionStatus: SubscriptionStatus.ACTIVE,
-        },
-      });
-      const user = await tx.user.create({
-        data: {
-          email: adminEmail,
-          passwordHash,
-          name: adminName,
-          role: 'TENANT_ADMIN',
-          tenantId: tenant.id,
-          isActive: true,
-        },
-      });
-      return { tenant, user };
-    });
-
-    res.status(201).json(result.tenant);
+    const body: z.infer<typeof createTenantSchema>['body'] = res.locals.validatedBody;
+    const tenant = await createTenant(body);
+    res.status(201).json(tenant);
   } catch (error) {
     next(error);
   }

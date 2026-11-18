@@ -28,6 +28,14 @@ interface MonitoringStats {
   topEndpoints: { endpoint: string; count: number }[];
 }
 
+const API_KEY_NAME_MAX_LENGTH = 60;
+const API_KEY_SCOPES = [
+  { value: "full", label: "Accès complet" },
+  { value: "read", label: "Lecture seule" },
+  { value: "write", label: "Lecture + Écriture" },
+  { value: "gateway", label: "Gateway uniquement" },
+];
+
 const ApiDashboardPage = (): JSX.Element => {
   const { limits, loading: limitsLoading } = useSubscriptionLimits();
   const router = useRouter();
@@ -82,11 +90,15 @@ const ApiDashboardPage = (): JSX.Element => {
   useEffect(() => { (async () => { await Promise.all([fetchKeys(), fetchLogs(), fetchStats()]); setLoading(false); })(); }, []);
   useEffect(() => { fetchLogs(); }, [logsPage, filterMethod, filterStatus, filterEndpoint]);
 
-  const generateKey = async () => {
-    if (!newKeyName.trim()) return;
-    await api.post("/api/v1/api-keys", { name: newKeyName, scope: newKeyScope });
+  const keyName = newKeyName.trim();
+  const canGenerateKey = keyName.length >= 1 && keyName.length <= API_KEY_NAME_MAX_LENGTH
+    && API_KEY_SCOPES.some(({ value }) => value === newKeyScope);
+
+  const generateKey = async (): Promise<void> => {
+    if (!canGenerateKey) return;
+    await api.post("/api/v1/api-keys", { name: keyName, scope: newKeyScope });
     setShowGen(false); setNewKeyName(""); setNewKeyScope("full");
-    fetchKeys();
+    await fetchKeys();
   };
 
   const confirmRevoke = async () => {
@@ -203,10 +215,18 @@ const ApiDashboardPage = (): JSX.Element => {
         <DialogContent>
           <DialogHeader><DialogTitle>Générer une nouvelle clé API</DialogTitle></DialogHeader>
           <div className="space-y-3">
-            <div><Label htmlFor="keyName">Nom de la clé</Label><Input id="keyName" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} /></div>
-            <div><Label>Portée (scope)</Label><Select value={newKeyScope} onValueChange={setNewKeyScope}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="full">Accès complet</SelectItem><SelectItem value="read">Lecture seule</SelectItem><SelectItem value="write">Lecture + Écriture</SelectItem><SelectItem value="gateway">Gateway uniquement</SelectItem></SelectContent></Select></div>
+            <div><Label htmlFor="keyName">Nom de la clé</Label><Input id="keyName" maxLength={API_KEY_NAME_MAX_LENGTH} value={newKeyName} onChange={e => setNewKeyName(e.target.value)} /></div>
+            <div>
+              <Label>Portée (scope)</Label>
+              <Select value={newKeyScope} onValueChange={setNewKeyScope}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {API_KEY_SCOPES.map(({ value, label }) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
-          <DialogFooter className="mt-4"><Button variant="outline" onClick={() => setShowGen(false)}>Annuler</Button><Button onClick={generateKey} className="bg-emerald-600 hover:bg-emerald-700">Générer la clé</Button></DialogFooter>
+          <DialogFooter className="mt-4"><Button variant="outline" onClick={() => setShowGen(false)}>Annuler</Button><Button onClick={generateKey} disabled={!canGenerateKey} className="bg-emerald-600 hover:bg-emerald-700">Générer la clé</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
