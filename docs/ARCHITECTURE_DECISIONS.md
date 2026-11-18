@@ -18,6 +18,9 @@
 - `POST /auth/login` → backend pose `access_token` (15 min) et `refresh_token` (7 jours) en cookies `httpOnly`.
 - Middleware `authenticate.ts` lit le cookie ou le header `Authorization` (fallback API keys).
 - En développement cross-port (`localhost:3000` → `localhost:4000`), le navigateur bloque le cookie `SameSite=Lax`. Solution temporaire : le backend renvoie aussi `accessToken` dans le JSON, stocké dans `localStorage` et envoyé en header `Authorization`.
+- Socket.IO lit au handshake le cookie `access_token` en priorité ; en développement cross-port, le client peut utiliser `auth.token` si le jeton local est disponible.
+- Le handshake exige un JWT signé et une session valide en base : utilisateur actif, `jwtVersion` identique et tenant actif, sauf pour `SUPER_ADMIN`.
+- `join:building` valide l’UUID et n’autorise que les bâtiments du tenant authentifié ; `SUPER_ADMIN` peut rejoindre tout bâtiment existant.
 
 **Conséquences** :
 - En production (même domaine), seul le cookie est utilisé.
