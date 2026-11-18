@@ -1,4 +1,7 @@
 import { create } from 'zustand';
+import type { Alert } from '@/types';
+
+export type { Alert, AlertType, Severity } from '@/types';
 
 export type User = {
   id: string;
@@ -33,23 +36,6 @@ export type Reading = {
   metric: string;
   value: number;
   unit?: string;
-};
-
-export type AlertType = 'ENERGY_THRESHOLD' | 'DEVICE_OFFLINE' | 'AUTOMATION_FIRED' | 'ANOMALY';
-export type Severity = 'INFO' | 'WARNING' | 'CRITICAL';
-
-export type Alert = {
-  id: string;
-  tenantId: string;
-  buildingId: string;
-  deviceId?: string;
-  type: AlertType;
-  severity: Severity;
-  message: string;
-  metadata: Record<string, unknown>;
-  isRead: boolean;
-  resolvedAt?: string;
-  createdAt: string;
 };
 
 // ─── AUTH SLICE ────────────────────────────────────────────────
@@ -145,10 +131,13 @@ interface AlertsState {
 
 const createAlertsSlice = (set: StoreSetter) => ({
   alerts: [] as Alert[],
-  addAlert: (alert: Alert) => {
-    set((state: AlertsState) => ({
-      alerts: [alert, ...state.alerts].slice(0, 50),
-    }));
+  addAlert: (alert: Alert): void => {
+    set((state: AlertsState) => {
+      const previous = state.alerts.find(({ id }) => id === alert.id);
+      if (previous && (previous.isRead || !alert.isRead)) return state;
+
+      return { alerts: [alert, ...state.alerts.filter(({ id }) => id !== alert.id)].slice(0, 50) };
+    });
   },
 });
 

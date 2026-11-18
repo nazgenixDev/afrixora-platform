@@ -12,43 +12,53 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import api from "@/lib/api";
+import logger from "@/lib/logger";
+import useStore from "@/store";
+import type { Alert, PaginatedResponse } from "@/types";
 
-interface Alert {
-  id: string;
-  severity: string;
-  message: string;
-  isRead: boolean;
-  createdAt: string;
-}
-
-const NotificationBell = () => {
+const NotificationBell = (): JSX.Element => {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
-
-  const fetchAlerts = async () => {
-    try {
-      const res = await api.get("/api/v1/alerts?isRead=false");
-      const data = res.data || [];
-      setAlerts(data.slice(0, 5));
-      setUnreadCount(data.length);
-    } catch (err) {
-      // silencieux
-    }
-  };
+  const storeAlerts = useStore((state) => state.alerts);
+  const addAlert = useStore((state) => state.addAlert);
 
   useEffect(() => {
-    fetchAlerts();
-    const interval = setInterval(fetchAlerts, 30000);
-    return () => clearInterval(interval);
-  }, []);
+    let pending: AbortController | undefined;
+    const fetchAlerts = async (): Promise<void> => {
+      pending?.abort();
+      const controller = new AbortController();
+      pending = controller;
 
-  const markAsRead = async (id: string) => {
+      try {
+        const res = await api.get<Alert[] | PaginatedResponse<Alert>>("/api/v1/alerts", {
+          params: { isRead: false, limit: 5 },
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
+        const data = Array.isArray(res.data) ? res.data : res.data.data ?? res.data;
+        const unreadAlerts = data.filter((alert) => !alert.isRead);
+        setAlerts(unreadAlerts.slice(0, 5));
+        setUnreadCount(Array.isArray(res.data) ? unreadAlerts.length : res.data.total);
+      } catch (err) {
+        if (!controller.signal.aborted) logger.error("Erreur de chargement des notifications", err);
+      }
+    };
+
+    void fetchAlerts();
+    const interval = setInterval(fetchAlerts, 30000);
+    return () => {
+      pending?.abort();
+      clearInterval(interval);
+    };
+  }, [storeAlerts]);
+
+  const markAsRead = async (id: string): Promise<void> => {
     try {
-      await api.patch(`/api/v1/alerts/${id}/read`);
+      const { data: alert } = await api.patch<Alert>(`/api/v1/alerts/${id}/read`);
       setAlerts(prev => prev.filter(a => a.id !== id));
-      setUnreadCount(prev => Math.max(0, prev - 1));
+      addAlert(alert);
     } catch (err) {
-      // silencieux
+      logger.error("Erreur de marquage de la notification comme lue", err);
     }
   };
 

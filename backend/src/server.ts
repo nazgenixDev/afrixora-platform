@@ -75,9 +75,9 @@ apiRouter.use('/devices', authenticateOrApiKey, deviceRoutes);
 apiRouter.use('/readings', authenticateOrApiKey, readingRoutes);
 apiRouter.use('/energy', authenticateOrApiKey, energyRoutes);
 apiRouter.use('/reports', authenticateOrApiKey, reportRoutes);
-apiRouter.use('/alerts', authenticateOrApiKey, alertRoutes);
 
 // Routes admin (JWT uniquement)
+apiRouter.use('/alerts', authenticate, alertRoutes);
 apiRouter.use('/automations', authenticate, automationRoutes);
 apiRouter.use('/api-keys', authenticate, apiKeyRoutes);
 apiRouter.use('/api-logs', authenticate, apiLogRoutes);

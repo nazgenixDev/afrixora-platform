@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,7 +11,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import useSocket from "@/hooks/useSocket";
-import useStore, { Alert, Severity } from "@/store";
+import useStore from "@/store";
+import type { Alert, AlertType, PaginatedResponse, Severity } from "@/types";
 import api from "@/lib/api";
 import logger from "@/lib/logger";
 
@@ -27,10 +28,10 @@ interface AlertFilters {
 }
 
 const AlertsPage = (): JSX.Element => {
-  // State
   const [buildings, setBuildings] = useState<Building[]>([]);
   const [selectedBuilding, setSelectedBuilding] = useState<Building | null>(null);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [fetchedAlerts, setFetchedAlerts] = useState<Alert[]>([]);
+  const [unreadCount, setUnreadCount] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<AlertFilters>({
@@ -39,119 +40,123 @@ const AlertsPage = (): JSX.Element => {
     buildingId: "ALL",
   });
 
-  // Get alerts from store
   const storeAlerts = useStore((state) => state.alerts);
   const addAlert = useStore((state) => state.addAlert);
+  const tenantId = useStore((state) => state.user?.tenantId);
 
-  // Connect to socket for real-time updates
   const { isConnected } = useSocket({
     buildingId: selectedBuilding?.id,
     enabled: !!selectedBuilding,
   });
 
-  // Fetch buildings on component mount
   useEffect(() => {
-    const fetchBuildings = async () => {
+    const fetchBuildings = async (): Promise<void> => {
       try {
-        const response = await api.get("/api/v1/buildings");
+        const response = await api.get<Building[] | PaginatedResponse<Building>>("/api/v1/buildings");
         const raw = response.data;
         setBuildings(Array.isArray(raw) ? raw : (raw?.data ?? []));
       } catch (err) {
-        logger.error("Error fetching buildings:", err);
-        setError("Failed to load buildings");
+        logger.error("Erreur de chargement des bâtiments", err);
+        setError("Impossible de charger les bâtiments.");
       }
     };
 
     fetchBuildings();
   }, []);
 
-  // Fetch alerts on component mount and when filters change
   useEffect(() => {
-    const fetchAlerts = async () => {
+    const controller = new AbortController();
+    const fetchAlerts = async (): Promise<void> => {
       setIsLoading(true);
       setError(null);
 
       try {
-        // Build query params
-        const params: Record<string, string> = {};
-        if (filters.severity !== "ALL") params.severity = filters.severity;
-        if (filters.isRead !== "ALL") params.isRead = String(filters.isRead);
-        if (filters.buildingId !== "ALL") params.buildingId = filters.buildingId;
-
-        const response = await api.get("/api/v1/alerts", { params });
-        const alertRaw = response.data;
-        const alertList = Array.isArray(alertRaw) ? alertRaw : (alertRaw?.data ?? []);
-        setAlerts(alertList);
-
-        // Add alerts to store for real-time updates
-        alertList.forEach((alert: Alert) => {
-          if (!storeAlerts.some((a) => a.id === alert.id)) {
-            addAlert(alert);
-          }
+        const res = await api.get<Alert[] | PaginatedResponse<Alert>>("/api/v1/alerts", {
+          params: {
+            severity: filters.severity === "ALL" ? undefined : filters.severity,
+            isRead: filters.isRead === "ALL" ? undefined : filters.isRead,
+            buildingId: filters.buildingId === "ALL" ? undefined : filters.buildingId,
+          },
+          signal: controller.signal,
         });
+        const data = Array.isArray(res.data) ? res.data : res.data.data ?? res.data;
+        if (!controller.signal.aborted) setFetchedAlerts(data);
       } catch (err) {
-        logger.error("Error fetching alerts:", err);
-        setError("Failed to load alerts");
+        if (controller.signal.aborted) return;
+        logger.error("Erreur de chargement des alertes", err);
+        setError("Impossible de charger les alertes.");
       } finally {
-        setIsLoading(false);
+        if (!controller.signal.aborted) setIsLoading(false);
       }
     };
 
-    fetchAlerts();
-  }, [filters, addAlert, storeAlerts]);
+    void fetchAlerts();
+    return () => controller.abort();
+  }, [filters, tenantId]);
 
-  // Update alerts when new ones come in via socket
+  const { severity, buildingId } = filters;
   useEffect(() => {
-    // Merge store alerts with fetched alerts, prioritizing store alerts
-    const mergedAlerts = [...alerts];
-
-    storeAlerts.forEach((storeAlert) => {
-      const existingIndex = mergedAlerts.findIndex((a) => a.id === storeAlert.id);
-      if (existingIndex >= 0) {
-        mergedAlerts[existingIndex] = storeAlert;
-      } else {
-        // Only add if it passes the filters
-        if (
-          (filters.severity === "ALL" || storeAlert.severity === filters.severity) &&
-          (filters.isRead === "ALL" || storeAlert.isRead === filters.isRead) &&
-          (filters.buildingId === "ALL" || storeAlert.buildingId === filters.buildingId)
-        ) {
-          mergedAlerts.unshift(storeAlert);
-        }
+    const controller = new AbortController();
+    const fetchUnreadCount = async (): Promise<void> => {
+      try {
+        const res = await api.get<Alert[] | PaginatedResponse<Alert>>("/api/v1/alerts", {
+          params: {
+            isRead: false,
+            severity: severity === "ALL" ? undefined : severity,
+            buildingId: buildingId === "ALL" ? undefined : buildingId,
+          },
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
+        setUnreadCount(Array.isArray(res.data)
+          ? res.data.filter((alert) => !alert.isRead &&
+            (severity === "ALL" || alert.severity === severity) &&
+            (buildingId === "ALL" || alert.buildingId === buildingId)).length
+          : res.data.total);
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        logger.error("Erreur de chargement du nombre d’alertes non lues", err);
+        setUnreadCount(null);
       }
-    });
+    };
 
-    // Sort by creation date (newest first)
-    mergedAlerts.sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    void fetchUnreadCount();
+    return () => controller.abort();
+  }, [severity, buildingId, tenantId, storeAlerts]);
 
-    setAlerts(mergedAlerts);
-  }, [storeAlerts, filters]);
+  // Les événements Socket.IO et les confirmations de lecture enrichissent la liste HTTP.
+  const alerts = useMemo((): Alert[] => {
+    const alertsById = new Map(fetchedAlerts.map((alert) => [alert.id, alert]));
 
-  // Handle marking an alert as read
-  const handleMarkAsRead = async (alertId: string) => {
+    for (const alert of storeAlerts) {
+      if (alert.tenantId !== tenantId) continue;
+      const fetchedAlert = alertsById.get(alert.id);
+      if (!fetchedAlert || alert.isRead) alertsById.set(alert.id, alert);
+    }
+
+    return [...alertsById.values()]
+      .filter((alert) => alert.tenantId === tenantId &&
+        (filters.severity === "ALL" || filters.severity === alert.severity) &&
+        (filters.isRead === "ALL" || filters.isRead === alert.isRead) &&
+        (filters.buildingId === "ALL" || filters.buildingId === alert.buildingId))
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  }, [fetchedAlerts, storeAlerts, filters, tenantId]);
+
+  const handleMarkAsRead = async (alertId: string): Promise<void> => {
     try {
-      await api.patch(`/api/v1/alerts/${alertId}/read`);
-      
-      // Update local state
-      setAlerts((prevAlerts) =>
-        prevAlerts.map((alert) =>
-          alert.id === alertId ? { ...alert, isRead: true } : alert
-        )
-      );
+      const { data: alert } = await api.patch<Alert>(`/api/v1/alerts/${alertId}/read`);
+      setFetchedAlerts((current) => current.map((item) => item.id === alert.id ? alert : item));
+      addAlert(alert);
     } catch (err) {
-      logger.error("Error marking alert as read:", err);
+      logger.error("Erreur de marquage de l’alerte comme lue", err);
     }
   };
 
-  // Handle filter changes
-  const handleFilterChange = (key: keyof AlertFilters, value: any) => {
+  const handleFilterChange = <K extends keyof AlertFilters>(key: K, value: AlertFilters[K]): void => {
     setFilters((prev) => ({ ...prev, [key]: value }));
   };
 
-  // Get severity badge
-  const getSeverityBadge = (severity: Severity) => {
+  const getSeverityBadge = (severity: Severity): JSX.Element => {
     switch (severity) {
       case "INFO":
         return <Badge className="bg-blue-500">INFO</Badge>;
@@ -164,29 +169,27 @@ const AlertsPage = (): JSX.Element => {
     }
   };
 
-  // Get alert type label
-  const getAlertTypeLabel = (type: string): string => {
+  const getAlertTypeLabel = (type: AlertType): string => {
     switch (type) {
-      case "ENERGY_THRESHOLD":
-        return "Seuil d'énergie";
-      case "DEVICE_OFFLINE":
+      case "THRESHOLD":
+        return "Seuil dépassé";
+      case "OFFLINE":
         return "Appareil hors ligne";
-      case "AUTOMATION_FIRED":
+      case "AUTOMATION":
         return "Automatisation déclenchée";
-      case "ANOMALY":
-        return "Anomalie";
+      case "SYSTEM":
+        return "Système";
       default:
         return type;
     }
   };
 
-  // Format date
   const formatDate = (dateString: string): string => {
     const date = new Date(dateString);
     return date.toLocaleString();
   };
 
-  // Loading state
+  // Chargement
   if (isLoading && alerts.length === 0) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -198,7 +201,7 @@ const AlertsPage = (): JSX.Element => {
     );
   }
 
-  // Error state
+  // Erreur
   if (error && alerts.length === 0) {
     return (
       <div className="p-6 bg-red-50 border border-red-200 rounded-md">
@@ -210,7 +213,7 @@ const AlertsPage = (): JSX.Element => {
           onClick={() => {
             setError(null);
             setIsLoading(true);
-            // Reset filters and retry
+            setSelectedBuilding(null);
             setFilters({
               severity: "ALL",
               isRead: "ALL",
@@ -226,18 +229,19 @@ const AlertsPage = (): JSX.Element => {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* En-tête */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold">Alertes</h1>
           <p className="text-muted-foreground">
-            Gérez les alertes et notifications du système
+            {unreadCount === null ? "Gérez les alertes et notifications du système" :
+              `${unreadCount} alerte${unreadCount === 1 ? "" : "s"} non lue${unreadCount === 1 ? "" : "s"}`}
           </p>
         </div>
 
-        {/* Filters */}
+        {/* Filtres */}
         <div className="flex flex-col sm:flex-row gap-2">
-          {/* Severity filter */}
+          {/* Filtre de sévérité */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" className="w-full sm:w-auto">
@@ -284,7 +288,7 @@ const AlertsPage = (): JSX.Element => {
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Read/Unread filter */}
+          {/* Filtre de lecture */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" className="w-full sm:w-auto">
@@ -331,7 +335,7 @@ const AlertsPage = (): JSX.Element => {
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Building filter */}
+          {/* Filtre de bâtiment */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" className="w-full sm:w-auto">
@@ -380,7 +384,7 @@ const AlertsPage = (): JSX.Element => {
         </div>
       </div>
 
-      {/* Socket connection status */}
+      {/* État de la connexion temps réel */}
       {selectedBuilding && (
         <div
           className={`text-sm ${
@@ -398,7 +402,7 @@ const AlertsPage = (): JSX.Element => {
         </div>
       )}
 
-      {/* Alerts list */}
+      {/* Liste des alertes */}
       {alerts.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">

@@ -69,17 +69,20 @@ export interface ZoneBucket {
   total_kwh: number;
 }
 
+export type AlertType = 'THRESHOLD' | 'OFFLINE' | 'AUTOMATION' | 'SYSTEM';
+export type Severity = 'INFO' | 'WARNING' | 'CRITICAL';
+
 export interface Alert {
   id: string;
   tenantId: string;
   buildingId: string;
-  deviceId?: string;
-  type: string;
-  severity: "INFO" | "WARNING" | "CRITICAL";
+  deviceId?: string | null;
+  type: AlertType;
+  severity: Severity;
   message: string;
   metadata: Record<string, unknown>;
   isRead: boolean;
-  resolvedAt?: string;
+  resolvedAt?: string | null;
   createdAt: string;
 }
 
