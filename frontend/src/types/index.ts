@@ -53,18 +53,19 @@ export interface EnergySummary {
   estimatedCostUSD: number;
   peakPowerW: number;
   avgPowerW: number;
+  currentPowerW: number | null;
   deviceCount: number;
 }
 
 export interface ConsumptionBucket {
   bucket: string;
   total_kwh: number;
-  avg_power_w?: number;
+  avg_power_w?: number | null;
 }
 
 export interface ZoneBucket {
-  zoneId: string;
-  name: string;
+  zoneId: string | null;
+  name: string | null;
   zone_name?: string;
   total_kwh: number;
 }

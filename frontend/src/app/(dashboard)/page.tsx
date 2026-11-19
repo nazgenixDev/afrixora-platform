@@ -13,13 +13,13 @@ import logger from "@/lib/logger";
 import type { Device, Building, Alert, EnergySummary, ConsumptionBucket, ZoneBucket } from "@/types";
 import {
   LineChart, Line, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from "recharts";
 import { Zap, BarChart3, Cpu, AlertTriangle, Building2, Activity, RefreshCw } from "lucide-react";
 
 interface DashboardData {
   energySummary: EnergySummary | null;
-  consumptionData: { date: string; kwh: number; threshold: number }[];
+  consumptionData: { date: string; kwh: number }[];
   zoneDistribution: { name: string; value: number; color: string }[];
   devices: Device[];
   alerts: Alert[];
@@ -124,13 +124,12 @@ const DashboardPage = () => {
         });
 
         const consumptionData = (Array.isArray(consRes.data) ? consRes.data : (consRes.data?.data ?? [])).map((i: ConsumptionBucket) => ({
-          date: new Date(i.bucket).toLocaleDateString("fr-FR", { weekday: "short" }),
+          date: new Date(i.bucket).toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", timeZone: "Africa/Kinshasa" }),
           kwh: i.total_kwh,
-          threshold: 25,
         }));
 
         const zoneDistribution = (Array.isArray(zoneRes.data) ? zoneRes.data : (zoneRes.data?.data ?? [])).map((i: ZoneBucket, idx: number) => ({
-          name: i.zone_name || i.name || `Zone ${idx + 1}`,
+          name: i.zone_name || i.name || "Sans zone",
           value: i.total_kwh,
           color: COLORS[idx % COLORS.length],
         }));
@@ -264,11 +263,10 @@ const DashboardPage = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard
           label="Puissance actuelle"
-          value={data.energySummary?.avgPowerW?.toFixed(1) || "0"}
-          unit="kW"
+          value={data.energySummary?.currentPowerW?.toFixed(1) ?? "—"}
+          unit={data.energySummary?.currentPowerW != null ? "W" : undefined}
           icon={<Zap className="w-4 h-4" />}
           accentColor="emerald"
-          trend={{ direction: "up", value: "+12% vs hier" }}
         />
         <KpiCard
           label="Conso. 7 jours"
@@ -276,7 +274,6 @@ const DashboardPage = () => {
           unit="kWh"
           icon={<BarChart3 className="w-4 h-4" />}
           accentColor="blue"
-          trend={{ direction: "down", value: "-5% vs prec." }}
         />
         <KpiCard
           label="Appareils en ligne"
@@ -312,9 +309,7 @@ const DashboardPage = () => {
                     <YAxis unit="kWh" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend />
-                    <ReferenceLine y={25} stroke="#F97316" strokeDasharray="5 5" />
-                    <Line type="monotone" dataKey="kwh" stroke="#10b981" strokeWidth={2} dot={{ r: 3, fill: "#10b981" }} activeDot={{ r: 6 }} />
-                    <Line type="monotone" dataKey="threshold" stroke="#F97316" strokeDasharray="5 5" dot={false} name="Seuil" />
+                    <Line type="monotone" dataKey="kwh" name="Consommation" stroke="#10b981" strokeWidth={2} dot={{ r: 3, fill: "#10b981" }} activeDot={{ r: 6 }} />
                   </LineChart>
                 </ResponsiveContainer>
               ) : (

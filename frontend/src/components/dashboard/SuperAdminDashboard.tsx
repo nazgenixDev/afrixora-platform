@@ -16,7 +16,7 @@ const SuperAdminDashboard = () => {
   const [data, setData] = useState<any>({
     kpis: null,
     consumption: null,
-    currentPower: 0,
+    currentPower: null,
     topBuildings: [],
     recentAlerts: [],
     isLoading: true,
@@ -74,7 +74,7 @@ const SuperAdminDashboard = () => {
         </Card>
         <Card className="border-t-2 border-t-orange-500">
           <CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Puissance actuelle</CardTitle></CardHeader>
-          <CardContent><div className="text-xl font-bold">{currentPower?.toFixed(1) || "0"}<span className="text-sm text-muted-foreground"> kW</span></div></CardContent>
+          <CardContent><div className="text-xl font-bold">{currentPower?.toFixed(1) ?? "—"}{currentPower != null && <span className="text-sm text-muted-foreground"> W</span>}</div></CardContent>
         </Card>
       </div>
 
