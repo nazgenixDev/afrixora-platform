@@ -1,0 +1,9 @@
+# Modèle à copier dans l'espace de préparation de la migration.
+# Adapter ce bloc à la valeur de MQTT_API_USER avant l'activation.
+user afrixora_api
+topic read afrixora/+/+/devices/+/readings
+topic read afrixora/+/+/devices/+/events
+topic read afrixora/+/+/gateways/+/status
+topic write afrixora/+/+/devices/+/commands
+
+# Les blocs par passerelle sont générés par infrastructure/scripts/create-mqtt-gateway-user.sh.

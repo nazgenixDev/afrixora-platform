@@ -120,7 +120,7 @@ mqttWorker.ts
 **Décision** : Les lectures MQTT sont bufferisées dans Redis si TimescaleDB est indisponible.
 
 **Mécanisme** :
-- Échec `INSERT INTO sensor_readings` → `LPUSH` dans Redis (`mqtt_buffer:{tenantId}`).
-- Job toutes les 10 secondes : `RPOP` + retry INSERT.
-- Max 10 tentatives par message, puis discard.
-- Limite 1000 messages par tenant (LTRIM).
+- Après validation de la mesure, un échec d’insertion dans `sensor_readings` la place dans la liste Redis `mqtt_buffer:{tenantId}` avec son horodatage et une échéance `nextRetryAt`.
+- Toutes les 10 secondes, un worker prend un verrou Redis renouvelable et parcourt les buffers avec `SCAN`. Les mesures arrivées à échéance restent dans Redis jusqu’à confirmation de l’insertion ou du report.
+- Le délai double à partir de 10 secondes, jusqu’à 15 minutes. Le rejeu expire 24 heures après la mise en attente. Les abandons, y compris les évictions au-delà de 1 000 mesures par tenant, sont journalisés.
+- Une interruption entre la confirmation SQL et le retrait dans Redis peut entraîner un doublon au rejeu.

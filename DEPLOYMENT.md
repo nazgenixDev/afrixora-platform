@@ -175,3 +175,27 @@ compose_test down
 ```
 
 Les deux applications du schéma doivent réussir. Après recréation du conteneur, le relevé de test doit être présent dans le volume nommé.
+
+## 9. Préparer la migration des comptes MQTT
+
+La validation de cette procédure avec l’exploitant est requise avant toute activation. Inventorier les clients qui partagent aujourd’hui le compte API, leurs topics et les appareils attribués à chaque passerelle. Sauvegarder le fichier de mots de passe et la configuration Mosquitto pour pouvoir revenir en arrière.
+
+Depuis la racine du dépôt, sur une machine disposant de `mosquitto_passwd`, préparer des copies privées. Adapter la ligne `user afrixora_api` à la valeur réelle de `MQTT_API_USER` dans le fichier de préparation.
+
+```bash
+stage=$(mktemp -d)
+cp infrastructure/docker/mosquitto_passwd "$stage/passwd"
+chmod 600 "$stage/passwd"
+cp infrastructure/docker/mosquitto.acl "$stage/acl"
+infrastructure/scripts/create-mqtt-gateway-user.sh "$stage" "$tenant_id" "$building_id" "$gateway_id" "$device_id"
+```
+
+Répéter pour chaque passerelle en passant tous ses identifiants d’appareil après celui de la passerelle. Le script demande un mot de passe et crée un compte `gateway-<gatewayId>`. Le compte publie son statut et les relevés ou événements de ses appareils, et reçoit leurs commandes. Les règles sont définies par utilisateur, car la substitution Mosquitto `%u` s’applique à tous les comptes et doit occuper un niveau entier du topic. Les topics actuels des appareils ne comportent aucun segment identifiant la passerelle. [Documentation Mosquitto](https://mosquitto.org/man/mosquitto-conf-5.html)
+
+Si l’injecteur de démo est utilisé, ajouter à la copie de `passwd` un compte dédié avec `mosquitto_passwd "$stage/passwd" afrixora_demo`. Dans la copie de l’ACL, lui accorder uniquement `topic write afrixora/<tenantId>/<buildingId>/devices/+/readings` pour le bâtiment de démo, sous `user afrixora_demo`. Configurer `MQTT_DEMO_USER` et `MQTT_DEMO_PASSWORD` pour l’injecteur.
+
+Après validation, tester sur un broker isolé les accès de l’API et des passerelles sur TCP et WebSocket. Vérifier notamment le refus d’une publication hors du bâtiment, du statut d’une autre passerelle et des commandes émises par une passerelle.
+
+Pour migrer en production, installer d’abord le fichier de mots de passe préparé et recréer le conteneur Mosquitto pour prendre en compte le montage. Distribuer les nouveaux identifiants et confirmer la reconnexion de chaque client. Renouveler ensuite le secret API auparavant partagé dans le fichier de mots de passe et dans la configuration de l’API. Monter le fichier ACL préparé en lecture seule sur `/mosquitto/config/acl`, activer la directive commentée dans `mosquitto.conf` et vérifier que les deux fichiers sont lisibles par Mosquitto. Recréer le broker et l’API avec les paramètres mis à jour.
+
+En cas de problème avec les règles, désactiver la directive ACL et recréer le broker en conservant les nouveaux comptes. Pour revenir entièrement à l’état initial, rétablir aussi le fichier de mots de passe sauvegardé et les anciens identifiants sur les clients avant leur reconnexion.
