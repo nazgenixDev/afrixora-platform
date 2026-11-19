@@ -162,7 +162,7 @@ const AutomationsPage = () => {
     return `${metric} ${OPERATOR_LABELS[operator] || operator} ${value}`;
   };
 
-  if (!user || !['SUPER_ADMIN', 'TENANT_ADMIN'].includes(user.role)) {
+  if (!user || !['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN'].includes(user.role)) {
     return (
       <div className="flex items-center justify-center h-64">
         <p className="text-muted-foreground">Accès réservé aux administrateurs</p>

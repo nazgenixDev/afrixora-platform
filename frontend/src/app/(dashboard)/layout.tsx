@@ -70,20 +70,27 @@ const DashboardLayout = ({
     { href: "/settings", label: "Paramètres", icon: <Settings className="h-5 w-5" /> },
   ];
 
-  const adminNav = [
+  const buildingAdminNav = [
     { href: "/automations", label: "Automations", icon: <Workflow className="h-5 w-5" /> },
     { href: "/alerts", label: "Alertes", icon: <Bell className="h-5 w-5" /> },
+  ];
+
+  const adminNav = [
     { href: "/users", label: "Utilisateurs", icon: <Users className="h-5 w-5" /> },
     // API Dashboard visible uniquement si le plan le permet (hasApi)
     ...(limits?.hasApi !== false ? [{ href: "/api-dashboard" as const, label: "API", icon: <Globe className="h-5 w-5" /> }] : []),
   ];
 
   const isAdmin = ["SUPER_ADMIN", "TENANT_ADMIN"].includes(role);
-  // Ajouter Tenants uniquement pour SUPER_ADMIN
-  if (role === "SUPER_ADMIN") {
-    adminNav.unshift({ href: "/tenants", label: "Clients", icon: <Briefcase className="h-5 w-5" /> });
-  }
-  const navItems = isAdmin ? [...baseNav, ...adminNav] : baseNav;
+  const superAdminNav = role === "SUPER_ADMIN"
+    ? [{ href: "/tenants", label: "Clients", icon: <Briefcase className="h-5 w-5" /> }]
+    : [];
+  const navItems = [
+    ...baseNav,
+    ...superAdminNav,
+    ...(isAdmin || role === "BUILDING_ADMIN" ? buildingAdminNav : []),
+    ...(isAdmin ? adminNav : []),
+  ];
 
   const isActive = (href: string) => {
     if (href === "/") return pathname === "/";
