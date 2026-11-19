@@ -29,7 +29,7 @@ const SuperAdminDashboard = () => {
         setData({ ...res.data, isLoading: false });
       } catch (err) {
         logger.error(String(err));
-        setData(prev => ({ ...prev, isLoading: false }));
+        setData((prev: typeof data) => ({ ...prev, isLoading: false }));
       }
     })();
   }, []);

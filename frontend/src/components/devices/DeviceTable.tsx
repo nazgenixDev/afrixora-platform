@@ -13,7 +13,7 @@ interface DeviceTableProps {
   onDeviceClick: (device: Device) => void;
 }
 
-const DeviceTable: React.FC<DeviceTableProps> = ({ devices, selectedIds, setSelectedIds, toggleDevice, onDeviceClick }, canControl}) => {
+const DeviceTable: React.FC<DeviceTableProps> = ({ devices, selectedIds, setSelectedIds, toggleDevice, onDeviceClick }) => {
   const toggleSelectAll = () => {
     if (selectedIds.size === devices.length) setSelectedIds(new Set());
     else setSelectedIds(new Set(devices.map(d => d.id)));

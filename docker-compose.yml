@@ -37,7 +37,7 @@ services:
     volumes:
       - afrixora_redis_data:/data
     command: >
-      redis-server --requirepass "${REDIS_PASSWORD}"
+      redis-server --requirepass "${REDIS_PASSWORD}" --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s

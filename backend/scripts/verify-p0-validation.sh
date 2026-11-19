@@ -5,7 +5,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 # Exécute les routes Express en mémoire avec des données de test et un JWT signé.
 NODE_ENV=development ./node_modules/.bin/ts-node --files <<'TS'
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { Socket } from 'node:net';
 import { test } from 'node:test';
@@ -27,6 +27,7 @@ test('P0-5 — validation HTTP et isolation des automatisations', async () => {
   const adminId = 'admin-test';
   const tenantSlugs = new Set<string>();
   const userEmails = new Set<string>();
+  let savedApiKey: Prisma.ApiKeyUncheckedCreateInput | undefined;
   const devices = [
     { id: deviceId, tenantId, buildingId },
     { id: foreignDeviceId, tenantId: 'other-tenant', buildingId: foreignBuildingId },
@@ -85,7 +86,8 @@ test('P0-5 — validation HTTP et isolation des automatisations', async () => {
       apiKey: {
         create: async ({ data }: { data: Prisma.ApiKeyUncheckedCreateInput }) => {
           assert.equal(data.tenantId, tenantId);
-          return { name: data.name, scope: data.scope };
+          savedApiKey = data;
+          return { name: data.name, scope: data.scope, keyPrefix: data.keyPrefix };
         },
       },
     },
@@ -158,9 +160,17 @@ test('P0-5 — validation HTTP et isolation des automatisations', async () => {
 
   await expectStatus(400, 'POST', '/api-keys', { name: 'Test', scope: 'inconnu' });
   await expectStatus(400, 'POST', '/api-keys', { name: 'a'.repeat(61), scope: 'read' });
-  for (const scope of ['read', 'write', 'full', 'gateway']) {
+  await expectStatus(400, 'POST', '/api-keys', { name: 'Test', scope: 'gateway' });
+  for (const scope of ['read', 'write', 'full']) {
     const body = await expectStatus(201, 'POST', '/api-keys', { name: 'Test', scope });
-    assert.equal(JSON.parse(body).scope, scope);
+    const created = JSON.parse(body);
+    assert.equal(created.scope, scope);
+    assert.match(created.key, /^afrx_live_[0-9a-f]{32}$/);
+    assert.equal(created.keyPrefix, created.key.slice('afrx_live_'.length, 'afrx_live_'.length + 8));
+    assert.equal(created.keyHash, undefined);
+    assert(savedApiKey);
+    assert.equal(savedApiKey.keyHash, createHash('sha256').update(created.key).digest('hex'));
+    assert.equal('key' in savedApiKey, false);
   }
 
   const tenant = {

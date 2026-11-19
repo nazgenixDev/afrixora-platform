@@ -9,7 +9,13 @@ import { z } from "zod";
 const createApiKeySchema = z.object({
   body: z.object({
     name: z.string().trim().min(1).max(60),
-    scope: z.enum(apiKeyScopes),
+    scope: z.enum(apiKeyScopes, {
+      errorMap: (_issue, context) => ({
+        message: context.data === "gateway"
+          ? "Aucune route HTTP ne prend en charge les clés de portée gateway."
+          : context.defaultError,
+      }),
+    }),
   }).strict(),
 });
 
@@ -42,7 +48,7 @@ router.post(
     try {
       const body: z.infer<typeof createApiKeySchema>["body"] = res.locals.validatedBody;
       const key = await apiKeyService.create(req.user!.tenantId, body);
-      return res.status(201).json(key);
+      return res.set("Cache-Control", "no-store").status(201).json(key);
     } catch (err) {
       next(err); return;
     }

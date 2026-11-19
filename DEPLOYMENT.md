@@ -199,3 +199,24 @@ Après validation, tester sur un broker isolé les accès de l’API et des pass
 Pour migrer en production, installer d’abord le fichier de mots de passe préparé et recréer le conteneur Mosquitto pour prendre en compte le montage. Distribuer les nouveaux identifiants et confirmer la reconnexion de chaque client. Renouveler ensuite le secret API auparavant partagé dans le fichier de mots de passe et dans la configuration de l’API. Monter le fichier ACL préparé en lecture seule sur `/mosquitto/config/acl`, activer la directive commentée dans `mosquitto.conf` et vérifier que les deux fichiers sont lisibles par Mosquitto. Recréer le broker et l’API avec les paramètres mis à jour.
 
 En cas de problème avec les règles, désactiver la directive ACL et recréer le broker en conservant les nouveaux comptes. Pour revenir entièrement à l’état initial, rétablir aussi le fichier de mots de passe sauvegardé et les anciens identifiants sur les clients avant leur reconnexion.
+
+## 10. Migrer et renouveler les clés API
+
+Prévoir une fenêtre de maintenance et sauvegarder PostgreSQL avant la migration. Les sauvegardes et journaux PostgreSQL antérieurs peuvent contenir des clés en clair. Protéger leur accès et appliquer les règles de conservation prévues.
+
+Si Redis est déjà en service avec la seule persistance RDB, activer l’AOF sur l’instance en cours avant de la recréer. Ouvrir `docker compose exec redis redis-cli --askpass`, lancer `CONFIG SET appendonly yes`, puis attendre que `INFO persistence` indique `aof_enabled=1`, `aof_rewrite_in_progress=0`, `aof_rewrite_scheduled=0` et `aof_last_bgrewrite_status=ok`.
+
+Depuis la racine du dépôt, construire la nouvelle image et arrêter les anciennes instances de l’API avant de supprimer la colonne en clair. Garder PostgreSQL en service.
+
+```bash
+docker compose build api frontend &&
+docker compose stop api &&
+docker compose run --rm --no-deps api node prisma/migrate-api-keys.cjs &&
+docker compose up -d redis api frontend
+```
+
+Le script applique les migrations Prisma en attente. La migration des clés hache chaque secret existant en SHA-256 et supprime la colonne en clair dans la même transaction. Elle conserve les identifiants, statuts et compteurs. Le préfixe affiché correspond aux huit premiers caractères de la partie aléatoire pour les formats `afrx_live_` et `nxa_live_`. Les clients qui détiennent déjà le secret peuvent continuer à l’utiliser, sauf pour la portée `gateway`, réservée à de futures routes HTTP dédiées. Les passerelles continuent à utiliser leurs identifiants MQTT.
+
+Renouveler manuellement les anciennes clés, en priorité celles qui ont été exposées ou copiées dans des exports. Pour chaque intégration, créer une clé de portée adaptée, copier son secret depuis la réponse de création ou la fenêtre du tableau de bord, le placer dans le gestionnaire de secrets du client, vérifier un appel, puis révoquer l’ancienne clé. Révoquer immédiatement les clés compromises. Une clé perdue doit être remplacée.
+
+Le quota est cumulatif sur la durée de vie de la clé. Redis applique la limite partagée entre les instances de l’API et PostgreSQL reçoit les compteurs toutes les 30 secondes. Redis doit conserver son volume et son journal AOF. Après une perte de ces données, le comptage reprend au dernier total synchronisé dans PostgreSQL. Une indisponibilité de Redis bloque les appels par clé API avec HTTP 503.

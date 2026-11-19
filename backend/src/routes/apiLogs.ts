@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import authenticate from "../middleware/authenticate";
 import { authorize } from "../middleware/authorize";
+import { requireApi } from "../middleware/features";
 import prisma from "../utils/database";
 
 const router = Router();
@@ -8,6 +9,7 @@ const router = Router();
 router.get(
   "/",
   authenticate,
+  requireApi,
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -54,6 +56,7 @@ router.get(
 router.get(
   "/stats",
   authenticate,
+  requireApi,
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
   async (req: Request, res: Response, next: NextFunction) => {
     try {

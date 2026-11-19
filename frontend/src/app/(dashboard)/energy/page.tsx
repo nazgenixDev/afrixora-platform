@@ -84,7 +84,7 @@ const EnergyPage = () => {
           error: null,
         });
       } catch (err) {
-        setData((prev) => ({ ...prev, isLoading: false, error: "Erreur de chargement" }));
+        setData((prev: typeof data) => ({ ...prev, isLoading: false, error: "Erreur de chargement" }));
       }
     })();
   }, [selectedBuilding, period]);

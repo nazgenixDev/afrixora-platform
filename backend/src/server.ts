@@ -32,6 +32,7 @@ import { authenticateOrApiKey } from './middleware/authenticateOrApiKey';
 import { apiKeyAuth } from './middleware/apiKeyAuth';
 
 import { connectMQTT } from './services/mqttWorker';
+import { startApiKeyUsageSync } from './services/apiKeyUsage';
 import { checkEnv } from './scripts/checkEnv';
 
 // Vérification critique des variables d'environnement au démarrage
@@ -141,5 +142,6 @@ connectMQTT(io);
 
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
+  startApiKeyUsageSync();
   logger.info(`Server running on port ${PORT}`);
 });

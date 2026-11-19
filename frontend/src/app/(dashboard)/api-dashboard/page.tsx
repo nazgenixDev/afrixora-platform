@@ -14,7 +14,7 @@ import api from "@/lib/api";
 import logger from "@/lib/logger";
 
 interface ApiKey {
-  id: string; name: string; key: string; scope: string; isActive: boolean;
+  id: string; name: string; keyPrefix: string; scope: string; isActive: boolean;
   requests: number; limit: number; lastUsed: string | null; createdAt: string;
 }
 
@@ -33,7 +33,6 @@ const API_KEY_SCOPES = [
   { value: "full", label: "Accès complet" },
   { value: "read", label: "Lecture seule" },
   { value: "write", label: "Lecture + Écriture" },
-  { value: "gateway", label: "Gateway uniquement" },
 ];
 
 const ApiDashboardPage = (): JSX.Element => {
@@ -47,6 +46,10 @@ const ApiDashboardPage = (): JSX.Element => {
   const [showGen, setShowGen] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyScope, setNewKeyScope] = useState("full");
+  const [creatingKey, setCreatingKey] = useState(false);
+  const [creationError, setCreationError] = useState(false);
+  const [createdKey, setCreatedKey] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
   const [revokeTarget, setRevokeTarget] = useState<ApiKey | null>(null);
   const [revokeLoading, setRevokeLoading] = useState(false);
   const [logsPage, setLogsPage] = useState(1);
@@ -95,10 +98,36 @@ const ApiDashboardPage = (): JSX.Element => {
     && API_KEY_SCOPES.some(({ value }) => value === newKeyScope);
 
   const generateKey = async (): Promise<void> => {
-    if (!canGenerateKey) return;
-    await api.post("/api/v1/api-keys", { name: keyName, scope: newKeyScope });
-    setShowGen(false); setNewKeyName(""); setNewKeyScope("full");
-    await fetchKeys();
+    if (!canGenerateKey || creatingKey) return;
+    setCreatingKey(true);
+    setCreationError(false);
+    try {
+      const { data } = await api.post<ApiKey & { key: string }>("/api/v1/api-keys", {
+        name: keyName,
+        scope: newKeyScope,
+      });
+      const { key, ...metadata } = data;
+      setKeys(previous => [metadata, ...previous]);
+      setShowGen(false);
+      setNewKeyName("");
+      setNewKeyScope("full");
+      setCopyStatus("idle");
+      setCreatedKey(key);
+    } catch {
+      setCreationError(true);
+    } finally {
+      setCreatingKey(false);
+    }
+  };
+
+  const copyCreatedKey = async () => {
+    if (!createdKey) return;
+    try {
+      await navigator.clipboard.writeText(createdKey);
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("error");
+    }
   };
 
   const confirmRevoke = async () => {
@@ -126,16 +155,16 @@ const ApiDashboardPage = (): JSX.Element => {
         <TabsContent value="keys" className="space-y-4 mt-4">
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">{keys.filter(k => k.isActive).length} active(s) / {keys.length} totale(s)</p>
-            <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => setShowGen(true)}>+ Nouvelle clé</Button>
+            <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => { setCreationError(false); setShowGen(true); }}>+ Nouvelle clé</Button>
           </div>
           <div className="border rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-muted/50"><tr><th className="p-3 text-left">Nom</th><th className="p-3 text-left">Clé</th><th className="p-3 text-left">Scope</th><th className="p-3 text-left">Utilisation</th><th className="p-3 text-left">Statut</th><th className="p-3 text-left">Dernier appel</th><th className="p-3 text-left">Actions</th></tr></thead>
+              <thead className="bg-muted/50"><tr><th className="p-3 text-left">Nom</th><th className="p-3 text-left">Préfixe</th><th className="p-3 text-left">Scope</th><th className="p-3 text-left">Utilisation</th><th className="p-3 text-left">Statut</th><th className="p-3 text-left">Dernier appel</th><th className="p-3 text-left">Actions</th></tr></thead>
               <tbody>
                 {keys.map(k => (
                   <tr key={k.id} className="border-t hover:bg-muted/20">
                     <td className="p-3 font-medium">{k.name}</td>
-                    <td className="p-3 font-mono text-xs text-muted-foreground">{k.key}</td>
+                    <td className="p-3 font-mono text-xs text-muted-foreground">{k.keyPrefix}</td>
                     <td className="p-3"><Badge variant="outline">{k.scope}</Badge></td>
                     <td className="p-3"><div className="text-xs">{k.requests.toLocaleString()} / {k.limit.toLocaleString()}</div><div className="h-1 bg-muted rounded-full mt-1 overflow-hidden"><div className={`h-full rounded-full ${k.requests/k.limit>0.8?"bg-red-500":k.requests/k.limit>0.6?"bg-orange-500":"bg-emerald-500"}`} style={{width:`${Math.min(100,(k.requests/k.limit)*100)}%`}}/></div></td>
                     <td className="p-3"><Badge variant={k.isActive?"default":"destructive"}>{k.isActive?"Actif":"Révoqué"}</Badge></td>
@@ -211,7 +240,7 @@ const ApiDashboardPage = (): JSX.Element => {
       </Tabs>
 
       {/* Modal Générer une clé */}
-      <Dialog open={showGen} onOpenChange={setShowGen}>
+      <Dialog open={showGen} onOpenChange={open => { if (!creatingKey) setShowGen(open); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>Générer une nouvelle clé API</DialogTitle></DialogHeader>
           <div className="space-y-3">
@@ -226,7 +255,35 @@ const ApiDashboardPage = (): JSX.Element => {
               </Select>
             </div>
           </div>
-          <DialogFooter className="mt-4"><Button variant="outline" onClick={() => setShowGen(false)}>Annuler</Button><Button onClick={generateKey} disabled={!canGenerateKey} className="bg-emerald-600 hover:bg-emerald-700">Générer la clé</Button></DialogFooter>
+          {creationError && <p role="alert" className="text-sm text-destructive">La création de la clé API a échoué.</p>}
+          <DialogFooter className="mt-4">
+            <Button variant="outline" disabled={creatingKey} onClick={() => setShowGen(false)}>Annuler</Button>
+            <Button onClick={generateKey} disabled={!canGenerateKey || creatingKey} className="bg-emerald-600 hover:bg-emerald-700">
+              {creatingKey ? "Génération en cours…" : "Générer la clé"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={createdKey !== null} onOpenChange={open => { if (!open) setCreatedKey(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Votre nouvelle clé API</DialogTitle>
+            <DialogDescription>
+              Copiez cette clé et conservez-la en lieu sûr. Elle ne sera plus affichée après la fermeture de cette fenêtre.
+            </DialogDescription>
+          </DialogHeader>
+          <div>
+            <Label htmlFor="created-api-key">Clé API</Label>
+            <Input id="created-api-key" readOnly value={createdKey ?? ""} className="font-mono" />
+          </div>
+          {copyStatus === "error" && <p role="alert" className="text-sm text-destructive">Sélectionnez la clé et copiez-la manuellement.</p>}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreatedKey(null)}>Fermer</Button>
+            <Button onClick={copyCreatedKey} disabled={copyStatus === "copied"}>
+              {copyStatus === "copied" ? "Clé copiée" : "Copier la clé"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
