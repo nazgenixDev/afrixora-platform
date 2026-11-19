@@ -11,6 +11,10 @@ services:
     ports:
       - "1883:1883"
 
+  grafana:
+    ports:
+      - "3001:3000"
+
   api:
     environment:
       - NODE_ENV=development

@@ -6,6 +6,8 @@
 .env.demo
 backend/.env
 frontend/.env
+/infrastructure/docker/mosquitto_passwd
+/infrastructure/docker/mosquitto_passwd.*
 
 # Dépendances
 node_modules/
