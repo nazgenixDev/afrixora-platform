@@ -24,6 +24,7 @@ const DashboardLayout = ({
   const pathname = usePathname();
   const user = useStore((state) => state.user);
   const setAuth = useStore((state) => state.setAuth);
+  const impersonatedTenantId = useStore((state) => state.impersonatedTenantId);
   const role = user?.role || "VIEWER";
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -37,17 +38,22 @@ const DashboardLayout = ({
         if (userData && !user) {
           setAuth(userData, null);
         }
-        // Charger les limites du plan d'abonnement
-        return api.get("/api/v1/tenants/current/subscription");
-      })
-      .then(res => {
-        setLimits(res.data.limits);
       })
       .catch(() => {
         // 401 → pas connecté
         redirectToLogin();
       });
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const controller = new AbortController();
+    setLimits(null);
+    api.get("/api/v1/tenants/current/subscription", { signal: controller.signal })
+      .then(({ data }) => { if (!controller.signal.aborted) setLimits(data.limits); })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [user, impersonatedTenantId]);
 
   const { resolvedTheme } = useTheme();
   const logoSidebar = resolvedTheme === "dark" ? "/afrixora_logo3.png" : "/iconAfrixora.svg";

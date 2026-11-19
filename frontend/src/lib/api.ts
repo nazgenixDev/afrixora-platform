@@ -1,6 +1,7 @@
 import axios, { type InternalAxiosRequestConfig } from "axios";
 import { redirectToLogin } from "./auth";
 import { API_URL } from "./config";
+import useStore from "@/store";
 
 const api = axios.create({
   baseURL: API_URL,
@@ -29,19 +30,38 @@ async function refreshSession(): Promise<void> {
 }
 
 api.interceptors.request.use((config): InternalAxiosRequestConfig => {
-  if (useLocalToken && typeof window !== "undefined") {
-    const token = localStorage.getItem("afrixora_token");
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+  if (typeof window !== "undefined") {
+    if (useLocalToken) {
+      const token = localStorage.getItem("afrixora_token");
+      if (token) config.headers.Authorization = `Bearer ${token}`;
+    }
+
+    const path = config.url?.split(/[?#]/, 1)[0].replace(/\/+$/, "") ?? "";
+    const isGlobalTenantRoute = path === "/api/v1/tenants"
+      || (path.startsWith("/api/v1/tenants/") && !path.startsWith("/api/v1/tenants/current/"));
+    const { user, impersonatedTenantId } = useStore.getState();
+    if (path.startsWith("/api/v1/") && !path.startsWith("/api/v1/auth/") && !isGlobalTenantRoute
+      && impersonatedTenantId && (!user || user.role === "SUPER_ADMIN")) {
+      config.headers.set("x-tenant-id", impersonatedTenantId);
+    } else {
+      config.headers.delete("x-tenant-id");
     }
   }
   return config;
 });
 
 api.interceptors.response.use(undefined, async (error: unknown) => {
-  if (typeof window === "undefined" || !axios.isAxiosError(error) || error.response?.status !== 401) {
+  if (typeof window === "undefined" || !axios.isAxiosError<{ code?: string }>(error)) {
     throw error;
   }
+
+  if (error.response?.status === 404 && error.response.data.code === "IMPERSONATED_TENANT_NOT_FOUND") {
+    const { impersonatedTenantId, setImpersonatedTenantId } = useStore.getState();
+    if (impersonatedTenantId && error.config?.headers.get("x-tenant-id") === impersonatedTenantId) {
+      setImpersonatedTenantId(null);
+    }
+  }
+  if (error.response?.status !== 401) throw error;
 
   const config: RetryConfig | undefined = error.config;
   const path = config?.url?.split(/[?#]/, 1)[0].replace(/\/+$/, "");

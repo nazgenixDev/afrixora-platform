@@ -9,5 +9,8 @@ export const authenticateOrApiKey = async (req: Request, res: Response, next: Ne
   if (req.headers["x-api-key"]) {
     return apiKeyAuth(req, res, next);
   }
+  if (req.cookies?.access_token) {
+    return authenticate(req, res, next);
+  }
   return res.status(401).json({ error: "Authentication required (JWT or API key)" });
 };
