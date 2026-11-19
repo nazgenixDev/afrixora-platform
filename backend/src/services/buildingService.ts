@@ -1,4 +1,5 @@
 import { prisma } from '../utils/database';
+import { NotFoundError } from '../utils/errors';
 
 interface BuildingFilters {
   name?: string;
@@ -39,9 +40,10 @@ export default {
     const [data, total] = await Promise.all([
       prisma.building.findMany({
         where: { tenantId, ...where, isActive: true },
+        orderBy: { id: 'asc' },
         skip,
         take: limit,
-        include: { zones: true, devices: true },
+        include: { _count: { select: { zones: true, devices: true } } },
       }),
       prisma.building.count({ where: { tenantId, ...where, isActive: true } }),
     ]);
@@ -87,10 +89,12 @@ export default {
   },
 
   async findById(id: string, tenantId: string) {
-    return prisma.building.findFirst({
+    const building = await prisma.building.findFirst({
       where: { id, tenantId, isActive: true },
-      include: { zones: true, devices: true },
+      include: { zones: { include: { _count: { select: { devices: true } } } }, devices: true },
     });
+    if (!building) throw new NotFoundError('Bâtiment introuvable');
+    return building;
   },
 
   async createZone(buildingId: string, data: ZoneCreateData, tenantId: string) {
