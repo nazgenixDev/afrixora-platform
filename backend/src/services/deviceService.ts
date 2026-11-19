@@ -32,7 +32,10 @@ export default {
     if (filters.zoneId) where.zoneId = filters.zoneId;
     if (filters.type) where.type = filters.type;
     if (filters.isOnline !== undefined) where.isOnline = filters.isOnline;
-    if (filters.search) where.name = { contains: filters.search, mode: 'insensitive' as const };
+    if (filters.search) {
+      const match = { contains: filters.search, mode: 'insensitive' } as const;
+      where.AND = [{ OR: [{ name: match }, { id: match }, { zone: { name: match } }] }];
+    }
 
     where.tenantId = tenantId;
 

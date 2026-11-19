@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PaginationControls } from "@/components/ui/pagination-controls";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
@@ -12,6 +13,7 @@ import Link from "next/link";
 import api from "@/lib/api";
 import useStore from "@/store";
 import logger from "@/lib/logger";
+import { usePaginatedList } from "@/hooks/usePaginatedList";
 
 interface Building {
   id: string; name: string; address: string; city: string; unitsCount: number; isActive: boolean; _count?: { zones: number; devices: number };
@@ -20,21 +22,18 @@ interface Building {
 const BuildingsPage = (): JSX.Element => {
   const user = useStore(state => state.user);
   const canEdit = user && ['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN'].includes(user.role);
-  const [buildings, setBuildings] = useState<Building[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
+  const { result, loading, error, setPage, reload } = usePaginatedList<Building>("/api/v1/buildings");
+  const buildings = result?.data ?? [];
+  const total = result?.total ?? 0;
   const [showAdd, setShowAdd] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Building | null>(null);
   const [formName, setFormName] = useState(""); const [formAddress, setFormAddress] = useState(""); const [formCity, setFormCity] = useState("Lubumbashi"); const [formUnits, setFormUnits] = useState(0);
 
-  const fetchBuildings = async () => { try { setIsLoading(true); const response = await api.get('/api/v1/buildings'); const raw = response.data; setBuildings(Array.isArray(raw) ? raw : (raw?.data ?? [])); setError(null); } catch (err) { setError('Erreur de chargement des bâtiments.'); } finally { setIsLoading(false); } };
-  useEffect(() => { fetchBuildings(); }, []);
+  const handleAdd = async () => { if (!formName || !formAddress) return; try { await api.post('/api/v1/buildings', { name: formName, address: formAddress, city: formCity, unitsCount: formUnits || 0 }); setShowAdd(false); setFormName(""); setFormAddress(""); setFormCity("Lubumbashi"); setFormUnits(0); reload(); } catch (err) { logger.error("Erreur ajout bâtiment", err); } };
 
-  const handleAdd = async () => { if (!formName || !formAddress) return; try { await api.post('/api/v1/buildings', { name: formName, address: formAddress, city: formCity, unitsCount: formUnits || 0 }); setShowAdd(false); setFormName(""); setFormAddress(""); setFormCity("Lubumbashi"); setFormUnits(0); fetchBuildings(); } catch (err) { logger.error("Erreur ajout bâtiment", err); } };
+  const handleDelete = async () => { if (!deleteTarget) return; try { await api.delete(`/api/v1/buildings/${deleteTarget.id}`); setDeleteTarget(null); reload(); } catch (err) { logger.error("Erreur suppression bâtiment", err); } };
 
-  const handleDelete = async () => { if (!deleteTarget) return; try { await api.delete(`/api/v1/buildings/${deleteTarget.id}`); setBuildings(prev => prev.filter(b => b.id !== deleteTarget.id)); setDeleteTarget(null); } catch (err) { logger.error("Erreur suppression bâtiment", err); } };
-
-  if (isLoading) return (
+  if (loading && !result) return (
     <div className="space-y-6 animate-fade-in">
       <div className="skeleton h-8 w-48 mb-2" />
       <div className="skeleton h-4 w-32" />
@@ -47,8 +46,8 @@ const BuildingsPage = (): JSX.Element => {
   if (error) return (
     <div className="p-6 bg-red-50 dark:bg-red-500/5 border border-red-200 dark:border-red-500/20 rounded-xl">
       <h2 className="text-lg font-semibold text-red-700 dark:text-red-400">Erreur</h2>
-      <p className="text-red-600 dark:text-red-300">{error}</p>
-      <Button variant="outline" className="mt-4" onClick={fetchBuildings}>Réessayer</Button>
+      <p className="text-red-600 dark:text-red-300">Erreur de chargement des bâtiments.</p>
+      <Button variant="outline" className="mt-4" onClick={reload}>Réessayer</Button>
     </div>
   );
 
@@ -60,7 +59,7 @@ const BuildingsPage = (): JSX.Element => {
           <h1 className="text-2xl font-bold tracking-tight">Bâtiments</h1>
           <p className="text-muted-foreground flex items-center gap-1">
             <Building2 className="w-3.5 h-3.5" />
-            {buildings.length} bâtiment{buildings.length > 1 ? 's' : ''} enregistré{buildings.length > 1 ? 's' : ''}
+            {total} bâtiment{total > 1 ? 's' : ''} enregistré{total > 1 ? 's' : ''}
           </p>
         </div>
         {canEdit && (
@@ -147,6 +146,8 @@ const BuildingsPage = (): JSX.Element => {
           ))}
         </div>
       )}
+
+      {result && <PaginationControls page={result.page} totalPages={result.totalPages} loading={loading} onPageChange={setPage} />}
 
       {/* Add Dialog */}
       <Dialog open={showAdd} onOpenChange={setShowAdd}>

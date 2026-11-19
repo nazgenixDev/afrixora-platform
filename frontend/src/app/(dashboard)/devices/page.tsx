@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { PaginationControls } from "@/components/ui/pagination-controls";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -12,7 +13,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import api from "@/lib/api";
 import logger from "@/lib/logger";
 import useStore from "@/store";
-import type { Device, Building, Zone } from "@/types";
+import { usePaginatedList } from "@/hooks/usePaginatedList";
+import type { Device, Building, PaginatedResponse, Zone } from "@/types";
 import { Zap, Wifi, WifiOff, Power, PowerOff, Search, LayoutGrid, List, Plus, Eye, Cpu, Loader2 } from "lucide-react";
 
 const STATS_COLORS: Record<string, { bg: string; text: string; icon: React.ReactNode }> = {
@@ -57,7 +59,7 @@ const AddDeviceDialog = ({
   zones: Zone[];
   selectedBuildingId: string;
   onBuildingChange: (buildingId: string) => void;
-  onDeviceCreated: () => Promise<void>;
+  onDeviceCreated: () => void;
 }) => {
   const [name, setName] = useState("");
   const [type, setType] = useState("LIGHT");
@@ -72,7 +74,7 @@ const AddDeviceDialog = ({
       const payload: any = { name, type, buildingId: selectedBuildingId, protocol };
       if (zoneId && zoneId !== "__none__") payload.zoneId = zoneId;
       await api.post('/api/v1/devices', payload);
-      await onDeviceCreated();
+      onDeviceCreated();
       onOpenChange(false);
       setName(""); setType("LIGHT"); setProtocol("MQTT"); setZoneId("");
     } catch (err) { logger.error(String(err)); } finally { setLoading(false); }
@@ -115,20 +117,24 @@ const AddDeviceDialog = ({
 };
 
 const DevicesPage = () => {
-  const [devices, setDevices] = useState<Device[]>([]);
   const [buildings, setBuildings] = useState<Building[]>([]);
-  const [filteredDevices, setFilteredDevices] = useState<Device[]>([]);
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<string>("");
   const [viewMode, setViewMode] = useState<"table" | "grid">("table");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [drawerDevice, setDrawerDevice] = useState<Device | null>(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [selectedBuildingId, setSelectedBuildingId] = useState<string>("");
   const [zones, setZones] = useState<Zone[]>([]);
+
+  const filters = new URLSearchParams();
+  if (search.trim()) filters.set("search", search.trim());
+  if (filterType) filters.set("type", filterType);
+  if (filterStatus) filters.set("isOnline", String(filterStatus === "online"));
+  const { result, loading, error, setPage, reload, updateItems } =
+    usePaginatedList<Device>("/api/v1/devices", filters.toString());
+  const devices = result?.data ?? [];
 
   const updateDevice = useStore(state => state.updateDevice);
   const user = useStore(state => state.user);
@@ -136,43 +142,30 @@ const DevicesPage = () => {
   const canControl = user && user.role !== 'VIEWER';
 
   useEffect(() => {
-    (async () => {
-      try {
-        const [dRes, bRes] = await Promise.all([
-          api.get('/api/v1/devices'),
-          api.get('/api/v1/buildings'),
-        ]);
-        const devicesRaw = dRes.data;
-        const buildingsRaw = bRes.data;
-        setDevices(Array.isArray(devicesRaw) ? devicesRaw : (devicesRaw?.data ?? []));
-        setFilteredDevices(Array.isArray(devicesRaw) ? devicesRaw : (devicesRaw?.data ?? []));
-        setBuildings(Array.isArray(buildingsRaw) ? buildingsRaw : (buildingsRaw?.data ?? []));
-        if (bRes.data.length > 0) setSelectedBuildingId(bRes.data[0].id);
-        setError(null);
-      } catch (err) {
-        logger.error(String(err));
-        setError("Erreur lors du chargement des appareils.");
-      } finally {
-        setIsLoading(false);
-      }
-    })();
+    const controller = new AbortController();
+    api.get<PaginatedResponse<Building>>("/api/v1/buildings", { signal: controller.signal })
+      .then(({ data }) => {
+        if (controller.signal.aborted) return;
+        setBuildings(data.data);
+        setSelectedBuildingId(data.data[0]?.id ?? "");
+      })
+      .catch(error => { if (!controller.signal.aborted) logger.error(String(error)); });
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
-    let result = devices;
-    if (search) {
-      const q = search.toLowerCase();
-      result = result.filter(d =>
-        d.name.toLowerCase().includes(q) ||
-        d.id.toLowerCase().includes(q) ||
-        d.zone?.name?.toLowerCase().includes(q)
-      );
-    }
-    if (filterType) result = result.filter(d => d.type === filterType);
-    if (filterStatus) result = result.filter(d => filterStatus === 'online' ? d.isOnline : !d.isOnline);
-    setFilteredDevices(result);
+    if (!selectedBuildingId) return;
+    const controller = new AbortController();
+    api.get<Zone[]>(`/api/v1/buildings/${selectedBuildingId}/zones`, { signal: controller.signal })
+      .then(({ data }) => { if (!controller.signal.aborted) setZones(data); })
+      .catch(() => { if (!controller.signal.aborted) setZones([]); });
+    return () => controller.abort();
+  }, [selectedBuildingId]);
+
+  const changePage = (page: number) => {
     setSelectedIds(new Set());
-  }, [search, filterType, filterStatus, devices]);
+    setPage(page);
+  };
 
   const toggleDevice = async (id: string, newState: boolean) => {
     try {
@@ -180,7 +173,7 @@ const DevicesPage = () => {
         command: 'set_state',
         params: { state: newState ? 'on' : 'off' }
       });
-      setDevices(prev => prev.map(d => d.id === id ? { ...d, config: { ...d.config, state: newState ? 'on' : 'off' } } : d));
+      updateItems(prev => prev.map(d => d.id === id ? { ...d, config: { ...d.config, state: newState ? 'on' : 'off' } } : d));
       updateDevice(id, { config: { state: newState ? 'on' : 'off' } } as any);
     } catch (err) {
       logger.error(String(err));
@@ -194,39 +187,36 @@ const DevicesPage = () => {
         api.post(`/api/v1/devices/${id}/control`, { command: 'set_state', params: { state: cmd } })
       )
     );
-    setDevices(prev => prev.map(d => selectedIds.has(d.id) ? { ...d, config: { ...d.config, state: cmd } } : d));
+    updateItems(prev => prev.map(d => selectedIds.has(d.id) ? { ...d, config: { ...d.config, state: cmd } } : d));
     selectedIds.forEach(id => updateDevice(id, { config: { state: cmd } } as any));
   };
 
-  const handleBuildingChange = async (buildingId: string) => {
+  const handleBuildingChange = (buildingId: string) => {
+    if (buildingId === selectedBuildingId) return;
+    setZones([]);
     setSelectedBuildingId(buildingId);
-    try {
-      const res = await api.get(`/api/v1/buildings/${buildingId}/zones`);
-      setZones(res.data);
-    } catch { setZones([]); }
   };
 
   const stats = {
-    total: devices.length,
+    total: result?.total ?? 0,
     online: devices.filter(d => d.isOnline).length,
     offline: devices.filter(d => !d.isOnline).length,
     active: devices.filter(d => d.config?.state === 'on' || d.config?.power === 'on').length,
     power: "—",
   };
 
-  if (isLoading) return <div className="flex items-center justify-center h-64">Chargement...</div>;
-  if (error) return <div className="p-6 bg-red-50 border border-red-200 rounded-md"><h2 className="text-lg font-semibold text-red-700">Erreur</h2><p className="text-red-600">{error}</p></div>;
+  if (loading && !result) return <div className="flex items-center justify-center h-64">Chargement...</div>;
 
   return (
     <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2">
-        <Input placeholder="Rechercher un appareil..." className="max-w-xs" value={search} onChange={e => setSearch(e.target.value)} />
-        <select className="h-9 rounded-md border bg-background px-3 text-sm" value={filterType} onChange={e => setFilterType(e.target.value)}>
+        <Input placeholder="Rechercher un appareil..." className="max-w-xs" maxLength={100} value={search} onChange={e => { setSearch(e.target.value); changePage(1); }} />
+        <select className="h-9 rounded-md border bg-background px-3 text-sm" value={filterType} onChange={e => { setFilterType(e.target.value); changePage(1); }}>
           <option value="">Tous types</option>
           {Object.entries(TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        <select className="h-9 rounded-md border bg-background px-3 text-sm" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
+        <select className="h-9 rounded-md border bg-background px-3 text-sm" value={filterStatus} onChange={e => { setFilterStatus(e.target.value); changePage(1); }}>
           <option value="">Tous statuts</option>
           <option value="online">En ligne</option>
           <option value="offline">Hors ligne</option>
@@ -249,18 +239,25 @@ const DevicesPage = () => {
       <div className="grid grid-cols-5 gap-2">
         {Object.entries(stats).map(([key, val]) => (
           <div key={key} className="bg-card border rounded-lg p-3 flex items-center gap-3">
-            <div className={`w-8 h-8 rounded flex items-center justify-center font-bold text-xs ${STATS_COLORS[key as keyof typeof STATS_COLORS]}`}>
-              {key[0].toUpperCase()}
+            <div className={`w-8 h-8 rounded flex items-center justify-center ${STATS_COLORS[key].bg} ${STATS_COLORS[key].text}`}>
+              {STATS_COLORS[key].icon}
             </div>
             <div>
               <div className="text-lg font-bold">{val}</div>
               <div className="text-xs text-muted-foreground">
-                {key === 'total' ? 'Total' : key === 'online' ? 'En ligne' : key === 'offline' ? 'Hors ligne' : key === 'active' ? 'Actifs' : 'Puissance'}
+                {key === 'total' ? 'Total' : key === 'online' ? 'En ligne (page)' : key === 'offline' ? 'Hors ligne (page)' : key === 'active' ? 'Actifs (page)' : 'Puissance'}
               </div>
             </div>
           </div>
         ))}
       </div>
+
+      {error && (
+        <div className="flex items-center gap-3">
+          <p role="alert">Erreur de chargement des appareils.</p>
+          <Button variant="outline" size="sm" onClick={reload}>Réessayer</Button>
+        </div>
+      )}
 
       {/* Content */}
       {viewMode === 'table' ? (
@@ -268,7 +265,7 @@ const DevicesPage = () => {
           <table className="w-full text-sm">
             <thead className="bg-muted/50">
               <tr>
-                <th className="p-3 text-left"><input type="checkbox" onChange={e => setSelectedIds(e.target.checked ? new Set(filteredDevices.map(d => d.id)) : new Set())} /></th>
+                <th className="p-3 text-left"><input type="checkbox" aria-label="Sélectionner les appareils de cette page" checked={devices.length > 0 && selectedIds.size === devices.length} onChange={e => setSelectedIds(e.target.checked ? new Set(devices.map(d => d.id)) : new Set())} /></th>
                 <th className="p-3 text-left">Appareil</th>
                 <th className="p-3 text-left">Type</th>
                 <th className="p-3 text-left">Zone</th>
@@ -278,7 +275,7 @@ const DevicesPage = () => {
               </tr>
             </thead>
             <tbody>
-              {filteredDevices.map(d => (
+              {devices.map(d => (
                 <tr key={d.id} className="border-t hover:bg-muted/20 cursor-pointer" onClick={() => setDrawerDevice(d)}>
                   <td className="p-3"><input type="checkbox" checked={selectedIds.has(d.id)} onChange={() => { const copy = new Set(selectedIds); copy.has(d.id) ? copy.delete(d.id) : copy.add(d.id); setSelectedIds(copy); }} onClick={e => e.stopPropagation()} /></td>
                   <td className="p-3">
@@ -301,7 +298,7 @@ const DevicesPage = () => {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-          {filteredDevices.map(d => (
+          {devices.map(d => (
             <Card key={d.id} className={`p-4 cursor-pointer hover:shadow-md transition-shadow ${d.config?.state === "on" ? "border-emerald-500/30 bg-emerald-500/5" : ""}`} onClick={() => setDrawerDevice(d)}>
               <div className="flex items-center justify-between mb-3">
                 <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-500 font-bold text-xs">{d.type[0]}</div>
@@ -313,6 +310,8 @@ const DevicesPage = () => {
           ))}
         </div>
       )}
+
+      {result && <PaginationControls page={result.page} totalPages={result.totalPages} loading={loading} onPageChange={changePage} />}
 
       {/* Drawer (détail) */}
       {drawerDevice && (
@@ -343,11 +342,7 @@ const DevicesPage = () => {
         zones={zones}
         selectedBuildingId={selectedBuildingId}
         onBuildingChange={handleBuildingChange}
-        onDeviceCreated={async () => {
-          const res = await api.get('/api/v1/devices');
-          const devicesRaw = res.data;
-          setDevices(Array.isArray(devicesRaw) ? devicesRaw : (devicesRaw?.data ?? []));
-        }}
+        onDeviceCreated={reload}
       />
     </div>
   );

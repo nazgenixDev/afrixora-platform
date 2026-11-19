@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import api from "@/lib/api";
 import useStore from "@/store";
+import type { Building, PaginatedResponse } from "@/types";
 
 const HeaderInfo = () => {
   const [time, setTime] = useState<string | null>(null);
@@ -37,14 +38,16 @@ const HeaderInfo = () => {
   // Charger le premier bâtiment du tenant courant
   useEffect(() => {
     const tenantId = isSuperAdmin ? impersonatedTenantId : user?.tenantId;
+    const controller = new AbortController();
+    setBuildingName("");
     if (tenantId) {
-      api.get(`/api/v1/buildings`)
-        .then(res => {
-          if (res.data?.length > 0) setBuildingName(res.data[0].name);
-          else setBuildingName("");
+      api.get<PaginatedResponse<Building>>("/api/v1/buildings", { params: { limit: 1 }, signal: controller.signal })
+        .then(({ data }) => {
+          if (!controller.signal.aborted) setBuildingName(data.data[0]?.name ?? "");
         })
         .catch(() => {});
     }
+    return () => controller.abort();
   }, [impersonatedTenantId, user?.tenantId, isSuperAdmin]);
 
   const handleTenantChange = (value: string) => {

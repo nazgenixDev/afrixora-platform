@@ -89,7 +89,7 @@ router.get(
             isActive: true,
             createdAt: true,
           },
-          orderBy: { createdAt: "desc" },
+          orderBy: [{ createdAt: "desc" }, { id: "asc" }],
           skip,
           take: limit,
         }),
