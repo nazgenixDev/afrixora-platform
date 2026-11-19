@@ -26,8 +26,9 @@ const TenantsPage = (): JSX.Element => {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<Tenant | null>(null);
-  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deactivateTarget, setDeactivateTarget] = useState<Tenant | null>(null);
+  const [deactivateLoading, setDeactivateLoading] = useState(false);
+  const [activityError, setActivityError] = useState<string | null>(null);
   const [form, setForm] = useState(INITIAL_TENANT_FORM);
   const [createError, setCreateError] = useState<string | null>(null);
   const [planChangeTarget, setPlanChangeTarget] = useState<Tenant | null>(null);
@@ -35,7 +36,7 @@ const TenantsPage = (): JSX.Element => {
   const [planChangeLoading, setPlanChangeLoading] = useState(false);
 
   const fetchTenants = async () => {
-    try { const res = await api.get("/api/v1/tenants"); const raw = res.data; setTenants(Array.isArray(raw) ? raw : (raw?.data ?? [])); } catch (err) { logger.error(String(err)); } finally { setLoading(false); }
+    try { const { data } = await api.get<Tenant[]>("/api/v1/tenants"); setTenants(data); } catch (err) { logger.error(String(err)); } finally { setLoading(false); }
   };
   useEffect(() => { fetchTenants(); }, []);
 
@@ -53,15 +54,31 @@ const TenantsPage = (): JSX.Element => {
     }
   };
 
-  const toggleStatus = async (id: string, isActive: boolean) => {
-    try { await api.patch(`/api/v1/tenants/${id}`, { isActive: !isActive }); setTenants(prev => prev.map(t => (t.id === id ? { ...t, isActive: !isActive } : t))); } catch (err) { logger.error(String(err)); }
+  const activateTenant = async (id: string) => {
+    setActivityError(null);
+    try {
+      const { data } = await api.patch<Pick<Tenant, "id" | "isActive">>(`/api/v1/tenants/${id}`, { isActive: true });
+      setTenants(prev => prev.map(tenant => tenant.id === data.id ? { ...tenant, isActive: data.isActive } : tenant));
+    } catch (error) {
+      logger.error(String(error));
+      setActivityError("Impossible d’activer le tenant.");
+    }
   };
 
-  const handleDelete = async () => {
-    if (!deleteTarget) return;
-    setDeleteLoading(true);
-    try { await api.delete(`/api/v1/tenants/${deleteTarget.id}`); setTenants(prev => prev.filter(t => t.id !== deleteTarget.id)); setDeleteTarget(null); }
-    catch (err) { logger.error(String(err)); } finally { setDeleteLoading(false); }
+  const deactivateTenant = async () => {
+    if (!deactivateTarget || deactivateLoading) return;
+    setDeactivateLoading(true);
+    setActivityError(null);
+    try {
+      await api.delete(`/api/v1/tenants/${deactivateTarget.id}`);
+      setTenants(prev => prev.map(tenant => tenant.id === deactivateTarget.id ? { ...tenant, isActive: false } : tenant));
+      setDeactivateTarget(null);
+    } catch (error) {
+      logger.error(String(error));
+      setActivityError("Impossible de désactiver le tenant.");
+    } finally {
+      setDeactivateLoading(false);
+    }
   };
 
   const handlePlanChange = async () => {
@@ -94,6 +111,7 @@ const TenantsPage = (): JSX.Element => {
         <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Bâtiments</CardTitle></CardHeader><CardContent><div className="text-xl font-bold">{tenants.reduce((acc, t) => acc + (t._count?.buildings || 0), 0)}</div></CardContent></Card>
         <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Utilisateurs</CardTitle></CardHeader><CardContent><div className="text-xl font-bold">{tenants.reduce((acc, t) => acc + (t._count?.users || 0), 0)}</div></CardContent></Card>
       </div>
+      {activityError && !deactivateTarget && <p role="alert" className="text-sm text-destructive">{activityError}</p>}
       <Card><CardContent className="p-0">
         <table className="w-full text-sm">
           <thead className="bg-muted/50"><tr><th className="p-3 text-left">Nom</th><th className="p-3 text-left">Slug</th><th className="p-3 text-left">Plan</th><th className="p-3 text-left">Changer de plan</th><th className="p-3 text-left">Bâtiments</th><th className="p-3 text-left">Utilisateurs</th><th className="p-3 text-left">Statut</th><th className="p-3 text-left">Créé le</th><th className="p-3 text-left">Actions</th></tr></thead>
@@ -119,8 +137,11 @@ const TenantsPage = (): JSX.Element => {
                 <td className="p-3 text-xs text-muted-foreground">{new Date(t.createdAt).toLocaleDateString()}</td>
                 <td className="p-3">
                   <div className="flex gap-1">
-                    <Button variant="ghost" size="sm" onClick={() => toggleStatus(t.id, t.isActive)}>{t.isActive?"Désactiver":"Activer"}</Button>
-                    <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(t)}>🗑️</Button>
+                    {t.isActive ? (
+                      <Button variant="ghost" size="sm" onClick={() => { setActivityError(null); setDeactivateTarget(t); }}>Désactiver</Button>
+                    ) : (
+                      <Button variant="ghost" size="sm" onClick={() => activateTenant(t.id)}>Activer</Button>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -169,18 +190,18 @@ const TenantsPage = (): JSX.Element => {
         </DialogContent>
       </Dialog>
 
-      {/* Dialog confirmation suppression */}
-      <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
+      <Dialog open={!!deactivateTarget} onOpenChange={open => { if (!open && !deactivateLoading) setDeactivateTarget(null); }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Supprimer le tenant</DialogTitle>
+            <DialogTitle>Désactiver le tenant</DialogTitle>
             <DialogDescription>
-              Êtes-vous sûr de vouloir supprimer définitivement <strong>{deleteTarget?.name}</strong> ({deleteTarget?.slug}) ? Tous les bâtiments, utilisateurs et données associés seront perdus. Cette action est irréversible.
+              Suspendre l’accès de <strong>{deactivateTarget?.name}</strong> ({deactivateTarget?.slug}) ? Ses données seront conservées et le tenant pourra être réactivé.
             </DialogDescription>
           </DialogHeader>
+          {activityError && <p role="alert" className="text-sm text-destructive">{activityError}</p>}
           <DialogFooter className="mt-4">
-            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Annuler</Button>
-            <Button variant="destructive" onClick={handleDelete} disabled={deleteLoading}>{deleteLoading?"Suppression...":"Supprimer définitivement"}</Button>
+            <Button variant="outline" disabled={deactivateLoading} onClick={() => setDeactivateTarget(null)}>Annuler</Button>
+            <Button variant="destructive" onClick={deactivateTenant} disabled={deactivateLoading}>{deactivateLoading ? "Désactivation…" : "Désactiver"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -9,6 +9,7 @@ import logger from '../utils/logger';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { Resend } from 'resend';
+import { NotFoundError } from '../utils/errors';
 
 const createTenantSchema = z.object({
   body: z.object({
@@ -37,12 +38,23 @@ const upgradeRequestSchema = z.object({
   }),
 });
 
+const tenantActivitySchema = z.object({
+  body: z.object({ isActive: z.boolean() }).strict(),
+});
+
 const router = Router();
+
+async function setTenantActivity(id: string, isActive: boolean) {
+  const { count } = await prisma.tenant.updateMany({ where: { id }, data: { isActive } });
+  if (count === 0) throw new NotFoundError('Tenant introuvable');
+}
 
 // GET /tenants - list all tenants (super admin only)
 router.get('/', authenticate, authorize(['SUPER_ADMIN']), async (req, res, next) => {
   try {
-    const tenants = await prisma.tenant.findMany();
+    const tenants = await prisma.tenant.findMany({
+      include: { _count: { select: { buildings: true, users: true } } },
+    });
     res.json(tenants);
   } catch (error) {
     next(error);
@@ -203,20 +215,21 @@ router.patch('/:id/plan', authenticate, authorize(['SUPER_ADMIN']), validate(pla
   }
 });
 
-// DELETE /tenants/:id - delete a tenant (super admin only)
+// PATCH /tenants/:id — modifier le statut du tenant (super administrateur)
+router.patch('/:id', authenticate, authorize(['SUPER_ADMIN']), validate(tenantActivitySchema), async (req, res, next) => {
+  try {
+    const { isActive }: z.infer<typeof tenantActivitySchema>['body'] = res.locals.validatedBody;
+    await setTenantActivity(req.params.id, isActive);
+    res.json({ id: req.params.id, isActive });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// DELETE /tenants/:id — désactiver le tenant et conserver ses données
 router.delete('/:id', authenticate, authorize(['SUPER_ADMIN']), async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const tenant = await prisma.tenant.findUnique({ where: { id } });
-    if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
-
-    await prisma.$transaction([
-      prisma.user.deleteMany({ where: { tenantId: id } }),
-      prisma.apiKey.deleteMany({ where: { tenantId: id } }),
-      prisma.subscriptionHistory.deleteMany({ where: { tenantId: id } }),
-      prisma.building.deleteMany({ where: { tenantId: id } }),
-      prisma.tenant.delete({ where: { id } }),
-    ]);
+    await setTenantActivity(req.params.id, false);
     res.status(204).send();
   } catch (error) {
     next(error);

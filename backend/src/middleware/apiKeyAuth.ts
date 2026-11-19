@@ -14,9 +14,12 @@ export const apiKeyAuth = async (req: Request, res: Response, next: NextFunction
 
     const key = await prisma.apiKey.findUnique({
       where: { keyHash: hashApiKey(apiKey) },
-      select: { id: true, name: true, tenantId: true, isActive: true, scope: true, requests: true, limit: true },
+      select: {
+        id: true, name: true, tenantId: true, isActive: true, scope: true, requests: true, limit: true,
+        tenant: { select: { isActive: true } },
+      },
     });
-    if (!key || !key.isActive) {
+    if (!key || !key.isActive || !key.tenant.isActive) {
       return res.status(401).json({ error: "Invalid or inactive API key" });
     }
 
