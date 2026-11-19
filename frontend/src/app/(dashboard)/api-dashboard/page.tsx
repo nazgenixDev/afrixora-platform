@@ -29,6 +29,7 @@ interface MonitoringStats {
 }
 
 const API_KEY_NAME_MAX_LENGTH = 60;
+const ALL_LOGS = "__all__";
 const API_KEY_SCOPES = [
   { value: "full", label: "Accès complet" },
   { value: "read", label: "Lecture seule" },
@@ -54,8 +55,8 @@ const ApiDashboardPage = (): JSX.Element => {
   const [revokeLoading, setRevokeLoading] = useState(false);
   const [logsPage, setLogsPage] = useState(1);
   const [logsTotalPages, setLogsTotalPages] = useState(1);
-  const [filterMethod, setFilterMethod] = useState("");
-  const [filterStatus, setFilterStatus] = useState("");
+  const [filterMethod, setFilterMethod] = useState(ALL_LOGS);
+  const [filterStatus, setFilterStatus] = useState(ALL_LOGS);
   const [filterEndpoint, setFilterEndpoint] = useState("");
 
   // Rediriger si le plan ne donne pas accès à l'API
@@ -71,18 +72,6 @@ const ApiDashboardPage = (): JSX.Element => {
     setKeys(Array.isArray(raw) ? raw : (raw?.data ?? []));
   };
 
-  const fetchLogs = async () => {
-    try {
-      const params: any = { page: logsPage, limit: 50 };
-      if (filterMethod) params.method = filterMethod;
-      if (filterStatus) params.statusCode = filterStatus;
-      if (filterEndpoint) params.endpoint = filterEndpoint;
-      const res = await api.get("/api/v1/api-logs", { params });
-      setLogs(res.data.data || []);
-      setLogsTotalPages(res.data.pagination?.totalPages || 1);
-    } catch (err) { logger.error(String(err)); }
-  };
-
   const fetchStats = async () => {
     try {
       const res = await api.get("/api/v1/api-logs/stats");
@@ -90,8 +79,29 @@ const ApiDashboardPage = (): JSX.Element => {
     } catch (err) { logger.error(String(err)); }
   };
 
-  useEffect(() => { (async () => { await Promise.all([fetchKeys(), fetchLogs(), fetchStats()]); setLoading(false); })(); }, []);
-  useEffect(() => { fetchLogs(); }, [logsPage, filterMethod, filterStatus, filterEndpoint]);
+  useEffect(() => {
+    Promise.all([fetchKeys(), fetchStats()])
+      .catch(error => logger.error(String(error)))
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = {
+      page: logsPage,
+      limit: 50,
+      method: filterMethod === ALL_LOGS ? undefined : filterMethod,
+      statusCode: filterStatus === ALL_LOGS ? undefined : filterStatus,
+      endpoint: filterEndpoint || undefined,
+    };
+    api.get<{ data: ApiLog[]; pagination: { totalPages: number } }>("/api/v1/api-logs", { params, signal: controller.signal })
+      .then(({ data }) => {
+        if (controller.signal.aborted) return;
+        setLogs(data.data);
+        setLogsTotalPages(Math.max(1, data.pagination.totalPages));
+      })
+      .catch(error => { if (!controller.signal.aborted) logger.error(String(error)); });
+    return () => controller.abort();
+  }, [logsPage, filterMethod, filterStatus, filterEndpoint]);
 
   const keyName = newKeyName.trim();
   const canGenerateKey = keyName.length >= 1 && keyName.length <= API_KEY_NAME_MAX_LENGTH
@@ -183,11 +193,11 @@ const ApiDashboardPage = (): JSX.Element => {
             <Input placeholder="Endpoint..." className="max-w-[180px]" value={filterEndpoint} onChange={e => { setFilterEndpoint(e.target.value); setLogsPage(1); }} />
             <Select value={filterMethod} onValueChange={v => { setFilterMethod(v); setLogsPage(1); }}>
               <SelectTrigger className="w-28"><SelectValue placeholder="Méthode" /></SelectTrigger>
-              <SelectContent><SelectItem value="__all__">Toutes</SelectItem><SelectItem value="GET">GET</SelectItem><SelectItem value="POST">POST</SelectItem><SelectItem value="PATCH">PATCH</SelectItem><SelectItem value="DELETE">DELETE</SelectItem></SelectContent>
+              <SelectContent><SelectItem value={ALL_LOGS}>Toutes</SelectItem><SelectItem value="GET">GET</SelectItem><SelectItem value="POST">POST</SelectItem><SelectItem value="PATCH">PATCH</SelectItem><SelectItem value="DELETE">DELETE</SelectItem></SelectContent>
             </Select>
             <Select value={filterStatus} onValueChange={v => { setFilterStatus(v); setLogsPage(1); }}>
               <SelectTrigger className="w-32"><SelectValue placeholder="Statut" /></SelectTrigger>
-              <SelectContent><SelectItem value="__all__">Tous</SelectItem><SelectItem value="200">2xx</SelectItem><SelectItem value="400">4xx</SelectItem><SelectItem value="500">5xx</SelectItem></SelectContent>
+              <SelectContent><SelectItem value={ALL_LOGS}>Tous</SelectItem><SelectItem value="2xx">2xx</SelectItem><SelectItem value="4xx">4xx</SelectItem><SelectItem value="5xx">5xx</SelectItem></SelectContent>
             </Select>
             <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
               <Button variant="ghost" size="sm" disabled={logsPage<=1} onClick={() => setLogsPage(p => p-1)}>← Précédent</Button>

@@ -1,10 +1,23 @@
 import { Router, Request, Response, NextFunction } from "express";
+import type { Prisma } from "@prisma/client";
+import { z } from "zod";
 import authenticate from "../middleware/authenticate";
 import { authorize } from "../middleware/authorize";
 import { requireApi } from "../middleware/features";
 import prisma from "../utils/database";
 
 const router = Router();
+
+const logQuerySchema = z.object({
+  method: z.string().optional(),
+  statusCode: z.union([
+    z.string().regex(/^(?:[245]xx|[1-5][0-9]{2})$/),
+    z.literal("__all__").transform(() => undefined),
+  ]).optional(),
+  endpoint: z.string().optional(),
+  page: z.coerce.number().int().min(1).max(Math.floor(2_147_483_647 / 100)).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
 
 router.get(
   "/",
@@ -13,22 +26,23 @@ router.get(
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { method, statusCode, endpoint, page = "1", limit = "50" } = req.query;
-      const pageNum = Math.max(1, parseInt(page as string));
-      const limitNum = Math.min(100, Math.max(1, parseInt(limit as string)));
-      const skip = (pageNum - 1) * limitNum;
+      const { method, statusCode, endpoint, page, limit } = logQuerySchema.parse(req.query);
+      const skip = (page - 1) * limit;
 
-      const where: any = { tenantId: req.user!.tenantId };
-      if (method) where.method = (method as string).toUpperCase();
-      if (statusCode) where.statusCode = parseInt(statusCode as string);
-      if (endpoint) where.endpoint = { contains: endpoint as string, mode: "insensitive" };
+      const where: Prisma.ApiLogWhereInput = { tenantId: req.user!.tenantId };
+      if (method && method !== "__all__") where.method = method.toUpperCase();
+      if (statusCode) {
+        const lower = /^[245](?:xx|00)$/.test(statusCode) ? Number(statusCode[0]) * 100 : undefined;
+        where.statusCode = lower === undefined ? Number(statusCode) : { gte: lower, lt: lower + 100 };
+      }
+      if (endpoint) where.endpoint = { contains: endpoint, mode: "insensitive" };
 
       const [logs, total] = await Promise.all([
         prisma.apiLog.findMany({
           where,
           orderBy: { createdAt: "desc" },
           skip,
-          take: limitNum,
+          take: limit,
           select: {
             id: true, method: true, endpoint: true, statusCode: true,
             durationMs: true, ip: true, createdAt: true, userId: true,
@@ -40,10 +54,10 @@ router.get(
       return res.json({
         data: logs,
         pagination: {
-          page: pageNum,
-          limit: limitNum,
+          page,
+          limit,
           total,
-          totalPages: Math.ceil(total / limitNum),
+          totalPages: Math.ceil(total / limit),
         },
       });
     } catch (err) {
