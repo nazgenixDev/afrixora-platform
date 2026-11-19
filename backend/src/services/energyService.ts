@@ -1,5 +1,14 @@
 import { query } from '../utils/database';
 
+function getPeriodHours(period: string) {
+  switch (period) {
+    case '24h': return '24';
+    case '7d': return '168';
+    case '3m': return '2160';
+    default: return '720';
+  }
+}
+
 export class EnergyService {
   async getReadings(
     tenantId: string,
@@ -45,7 +54,7 @@ export class EnergyService {
 
   async getConsumption(tenantId: string, buildingId: string, period: string) {
     const interval = period === '24h' ? '1 hour' : '1 day';
-    const hours = period === '24h' ? '24' : period === '7d' ? '168' : '720';
+    const hours = getPeriodHours(period);
 
     const result = await query(
       `SELECT 
@@ -65,7 +74,7 @@ export class EnergyService {
   }
 
   async getByDevice(tenantId: string, buildingId: string, period: string) {
-    const hours = period === '24h' ? '24' : period === '7d' ? '168' : '720';
+    const hours = getPeriodHours(period);
     
     const result = await query(
       `SELECT 
@@ -85,7 +94,7 @@ export class EnergyService {
   }
 
   async getByZone(tenantId: string, buildingId: string, period: string) {
-    const hours = period === '24h' ? '24' : period === '7d' ? '168' : '720';
+    const hours = getPeriodHours(period);
     
     const result = await query(
       `SELECT 
@@ -106,7 +115,7 @@ export class EnergyService {
   }
 
   async getSummary(tenantId: string, buildingId: string, period: string) {
-    const hours = period === '24h' ? '24' : period === '7d' ? '168' : '720';
+    const hours = getPeriodHours(period);
     const costPerKwh = parseFloat(process.env.ENERGY_COST_PER_KWH || '0.12');
 
     const result = await query(

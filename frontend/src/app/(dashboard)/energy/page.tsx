@@ -128,9 +128,9 @@ const EnergyPage = () => {
         ))}
         <Button variant="outline" size="sm" className="ml-auto" onClick={async () => {
   if (!selectedBuilding) return;
-  const from = new Date();
-  from.setDate(from.getDate() - (period === '24h' ? 1 : period === '7d' ? 7 : 30));
   const to = new Date();
+  const days = period === '24h' ? 1 : period === '7d' ? 7 : period === '3m' ? 90 : 30;
+  const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
   try {
     const response = await api.get(
       `/api/v1/reports/csv?buildingId=${selectedBuilding}&from=${from.toISOString()}&to=${to.toISOString()}`,
