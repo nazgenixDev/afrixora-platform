@@ -3,6 +3,17 @@ import authenticate from "../middleware/authenticate";
 import { authorize } from "../middleware/authorize";
 import prisma from "../utils/database";
 import { query } from "../utils/database";
+import { energySamplesSql, energyTimeZone, latestPowerW, totalEnergySql } from "../services/energyQueries";
+
+const dailyStart = `time_bucket(INTERVAL '1 day', NOW(), '${energyTimeZone}')`;
+const rollingStart = "NOW() - $1::integer * INTERVAL '1 hour'";
+
+const globalConsumption = (from: string, hourly: boolean, params: number[] = []) =>
+  query(
+    `WITH ${energySamplesSql(from, "NOW()", hourly, false)}
+     SELECT ${totalEnergySql} AS total_kwh FROM samples`,
+    params
+  );
 
 const router = Router();
 
@@ -35,42 +46,29 @@ router.get(
         prisma.automation.count({ where: { isActive: true } }),
         prisma.alert.count({ where: { isRead: false } }),
         prisma.alert.count({ where: { isRead: false, severity: "CRITICAL" } }),
+        globalConsumption(dailyStart, false),
+        globalConsumption(rollingStart, true, [168]),
+        globalConsumption(rollingStart, true, [720]),
+        globalConsumption(rollingStart, true, [8760]),
+        latestPowerW(),
         query(
-          `SELECT COALESCE(SUM(CASE WHEN metric = 'energy_kwh' THEN value ELSE 0 END), 0) as total_kwh
-           FROM sensor_readings
-           WHERE time > NOW() - INTERVAL '24 hours'`
-        ),
-        query(
-          `SELECT COALESCE(SUM(CASE WHEN metric = 'energy_kwh' THEN value ELSE 0 END), 0) as total_kwh
-           FROM sensor_readings
-           WHERE time > NOW() - INTERVAL '7 days'`
-        ),
-        query(
-          `SELECT COALESCE(SUM(CASE WHEN metric = 'energy_kwh' THEN value ELSE 0 END), 0) as total_kwh
-           FROM sensor_readings
-           WHERE time > NOW() - INTERVAL '30 days'`
-        ),
-        query(
-          `SELECT COALESCE(SUM(CASE WHEN metric = 'energy_kwh' THEN value ELSE 0 END), 0) as total_kwh
-           FROM sensor_readings
-           WHERE time > NOW() - INTERVAL '365 days'`
-        ),
-        query(
-          `SELECT COALESCE(AVG(CASE WHEN metric = 'power_w' THEN value ELSE NULL END), 0) as avg_power_w
-           FROM sensor_readings
-           WHERE time > NOW() - INTERVAL '1 hour'`
-        ),
-        query(
-          `SELECT d."buildingId" as building_id, b.name as building_name, t.name as tenant_name,
-                  COALESCE(SUM(CASE WHEN sr.metric = 'energy_kwh' THEN sr.value ELSE 0 END), 0) as total_kwh
-           FROM sensor_readings sr
-           JOIN "Device" d ON sr.device_id = d.id::uuid
-           JOIN "Building" b ON d."buildingId" = b.id
+          `WITH ${energySamplesSql(rollingStart, "NOW()", true, false)},
+           device_totals AS (
+             SELECT device_id, tenant_id, SUM(total) AS total_kwh
+             FROM samples
+             WHERE metric = 'energy_kwh'
+             GROUP BY device_id, tenant_id
+           )
+           SELECT b.id AS building_id, b.name AS building_name, t.name AS tenant_name,
+                  SUM(dt.total_kwh) AS total_kwh
+           FROM device_totals dt
+           JOIN "Device" d ON d.id = dt.device_id::text AND d."tenantId" = dt.tenant_id::text
+           JOIN "Building" b ON d."buildingId" = b.id AND d."tenantId" = b."tenantId"
            JOIN "Tenant" t ON b."tenantId" = t.id
-           WHERE sr.time > NOW() - INTERVAL '7 days'
-           GROUP BY d."buildingId", b.name, t.name
+           GROUP BY b.id, b.name, t.name
            ORDER BY total_kwh DESC
-           LIMIT 5`
+           LIMIT 5`,
+          [168]
         ),
         prisma.alert.findMany({
           where: { isRead: false },
@@ -90,7 +88,7 @@ router.get(
         building_id: string;
         building_name: string;
         tenant_name: string;
-        total_kwh: string;
+        total_kwh: number;
       }
 
       return res.json({
@@ -109,12 +107,12 @@ router.get(
           monthly: parseFloat(monthlyConsumption.rows[0]?.total_kwh || "0"),
           yearly: parseFloat(yearlyConsumption.rows[0]?.total_kwh || "0"),
         },
-        currentPower: parseFloat(currentPower.rows[0]?.avg_power_w || "0"),
+        currentPower,
         topBuildings: topBuildings.rows.map((r: BuildingConsumptionRow) => ({
           buildingId: r.building_id,
           buildingName: r.building_name,
           tenantName: r.tenant_name,
-          totalKwh: parseFloat(r.total_kwh || "0"),
+          totalKwh: r.total_kwh,
         })),
         recentAlerts: recentAlerts.map((alert: typeof recentAlerts[number]) => ({
           id: alert.id,

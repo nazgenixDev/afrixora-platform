@@ -46,6 +46,10 @@ FROM public.sensor_readings
 GROUP BY bucket, tenant_id, device_id, metric, unit
 WITH NO DATA;
 
+-- Inclut les heures récentes avant leur matérialisation par la tâche de fond.
+ALTER MATERIALIZED VIEW public.sensor_readings_hourly
+  SET (timescaledb.materialized_only = false);
+
 -- L’agrégat suit les données brutes, y compris lors de leur expiration.
 SELECT add_continuous_aggregate_policy('public.sensor_readings_hourly',
   start_offset => NULL,

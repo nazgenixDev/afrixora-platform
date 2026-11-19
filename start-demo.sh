@@ -77,14 +77,16 @@ ensure_container "afrixora-redis" "redis:7-alpine" "6379:6379"
 ensure_container "afrixora-mosquitto" "eclipse-mosquitto:2" "1883:1883"
 
 echo "⏳ Attente de PostgreSQL..."
-until docker exec afrixora-postgres pg_isready -U "$POSTGRES_USER"; do sleep 1; done
-docker exec -i afrixora-postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE EXTENSION IF NOT EXISTS timescaledb;" 2>/dev/null
+until docker exec afrixora-postgres pg_isready -h 127.0.0.1 -U "$POSTGRES_USER"; do sleep 1; done
 
 # Migrations et seed
 cd "$SCRIPT_DIR/backend"
 npx prisma migrate deploy || { echo "⚠️ Migration échouée, tentative avec db push"; npx prisma db push; }
 npx prisma db seed
 cd "$SCRIPT_DIR"
+
+docker exec -i afrixora-postgres psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+    -v ON_ERROR_STOP=1 --single-transaction -f - < infrastructure/scripts/01_schema.sql || exit 1
 
 # Backend
 echo "🔧 Démarrage du backend (port ${PORT})..."
