@@ -229,7 +229,7 @@ const ApiDashboardPage = (): JSX.Element => {
         <TabsContent value="monitor" className="mt-4">
           {stats && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-              <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Requêtes aujourd'hui</CardTitle></CardHeader><CardContent><div className="text-xl font-bold">{stats.totalRequestsToday}</div></CardContent></Card>
+              <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Requêtes aujourd&apos;hui</CardTitle></CardHeader><CardContent><div className="text-xl font-bold">{stats.totalRequestsToday}</div></CardContent></Card>
               <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Erreurs (4xx/5xx)</CardTitle></CardHeader><CardContent><div className="text-xl font-bold text-red-500">{stats.errorsToday}</div></CardContent></Card>
               <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Latence moyenne</CardTitle></CardHeader><CardContent><div className="text-xl font-bold">{stats.avgLatencyMs}<span className="text-sm text-muted-foreground">ms</span></div></CardContent></Card>
               <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Endpoints</CardTitle></CardHeader><CardContent><div className="text-xl font-bold">{stats.topEndpoints.length}</div></CardContent></Card>
