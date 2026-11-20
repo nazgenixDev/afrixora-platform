@@ -4,7 +4,7 @@ import { SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
 import { authenticate } from '../middleware/authenticate';
 import { authorize } from '../middleware/authorize';
 import { getPlanLimits } from '../utils/plans';
-import { createTenant } from '../services/tenantService';
+import { createTenant, deleteTenantPermanently } from '../services/tenantService';
 import logger from '../utils/logger';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
@@ -230,6 +230,17 @@ router.patch('/:id', authenticate, authorize(['SUPER_ADMIN']), validate(tenantAc
 router.delete('/:id', authenticate, authorize(['SUPER_ADMIN']), async (req, res, next) => {
   try {
     await setTenantActivity(req.params.id, false);
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+});
+
+// DELETE /tenants/:id/permanent — supprimer définitivement le tenant
+router.delete('/:id/permanent', authenticate, authorize(['SUPER_ADMIN']), async (req, res, next) => {
+  try {
+    await deleteTenantPermanently(req.params.id);
+    logger.info('Tenant supprimé définitivement', { tenantId: req.params.id, userId: req.user!.userId });
     res.status(204).send();
   } catch (error) {
     next(error);

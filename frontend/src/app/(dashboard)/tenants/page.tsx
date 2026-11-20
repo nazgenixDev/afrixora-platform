@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import api from "@/lib/api";
+import api, { tenantDeletedEvent } from "@/lib/api";
 import logger from "@/lib/logger";
 import useStore from "@/store";
 
@@ -29,6 +29,9 @@ const TenantsPage = (): JSX.Element => {
   const [deactivateTarget, setDeactivateTarget] = useState<Tenant | null>(null);
   const [deactivateLoading, setDeactivateLoading] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Tenant | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [form, setForm] = useState(INITIAL_TENANT_FORM);
   const [createError, setCreateError] = useState<string | null>(null);
   const [planChangeTarget, setPlanChangeTarget] = useState<Tenant | null>(null);
@@ -81,6 +84,29 @@ const TenantsPage = (): JSX.Element => {
     }
   };
 
+  const deleteTenant = async () => {
+    if (!deleteTarget || deleteLoading) return;
+    const { id } = deleteTarget;
+    setDeleteLoading(true);
+    setDeleteError(null);
+    try {
+      await api.delete(`/api/v1/tenants/${id}/permanent`);
+      setTenants(current => current.filter(tenant => tenant.id !== id));
+      const { impersonatedTenantId, setImpersonatedTenantId } = useStore.getState();
+      if (impersonatedTenantId === id) setImpersonatedTenantId(null);
+      window.dispatchEvent(new CustomEvent(tenantDeletedEvent, { detail: id }));
+      setDeleteTarget(null);
+    } catch (error) {
+      logger.error(String(error));
+      const response = isAxiosError<{ code?: string; error?: string }>(error) ? error.response : undefined;
+      setDeleteError(response?.data?.code === "PROTECTED_TENANT"
+        ? response.data.error ?? "Ce tenant héberge un compte super administrateur."
+        : "Impossible de supprimer le client. Actualisez la liste avant de réessayer.");
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
   const handlePlanChange = async () => {
     if (!planChangeTarget || !planChangeValue) return;
     setPlanChangeLoading(true);
@@ -112,7 +138,7 @@ const TenantsPage = (): JSX.Element => {
         <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Utilisateurs</CardTitle></CardHeader><CardContent><div className="text-xl font-bold">{tenants.reduce((acc, t) => acc + (t._count?.users || 0), 0)}</div></CardContent></Card>
       </div>
       {activityError && !deactivateTarget && <p role="alert" className="text-sm text-destructive">{activityError}</p>}
-      <Card><CardContent className="p-0">
+      <Card><CardContent className="overflow-x-auto p-0">
         <table className="w-full text-sm">
           <thead className="bg-muted/50"><tr><th className="p-3 text-left">Nom</th><th className="p-3 text-left">Slug</th><th className="p-3 text-left">Plan</th><th className="p-3 text-left">Changer de plan</th><th className="p-3 text-left">Bâtiments</th><th className="p-3 text-left">Utilisateurs</th><th className="p-3 text-left">Statut</th><th className="p-3 text-left">Créé le</th><th className="p-3 text-left">Actions</th></tr></thead>
           <tbody>
@@ -142,6 +168,10 @@ const TenantsPage = (): JSX.Element => {
                     ) : (
                       <Button variant="ghost" size="sm" onClick={() => activateTenant(t.id)}>Activer</Button>
                     )}
+                    <Button variant="destructive" size="sm" onClick={() => {
+                      setDeleteError(null);
+                      setDeleteTarget(t);
+                    }}>Supprimer</Button>
                   </div>
                 </td>
               </tr>
@@ -202,6 +232,25 @@ const TenantsPage = (): JSX.Element => {
           <DialogFooter className="mt-4">
             <Button variant="outline" disabled={deactivateLoading} onClick={() => setDeactivateTarget(null)}>Annuler</Button>
             <Button variant="destructive" onClick={deactivateTenant} disabled={deactivateLoading}>{deactivateLoading ? "Désactivation…" : "Désactiver"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onOpenChange={open => { if (!open && !deleteLoading) setDeleteTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Supprimer définitivement le client</DialogTitle>
+            <DialogDescription>
+              Le client <strong>{deleteTarget?.name}</strong> ({deleteTarget?.slug}) et ses données seront supprimés.
+              Cette action est irréversible.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && <p role="alert" className="text-sm text-destructive">{deleteError}</p>}
+          <DialogFooter className="mt-4">
+            <Button variant="outline" disabled={deleteLoading} onClick={() => setDeleteTarget(null)}>Annuler</Button>
+            <Button variant="destructive" disabled={deleteLoading} onClick={deleteTenant}>
+              {deleteLoading ? "Suppression…" : "Supprimer définitivement"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

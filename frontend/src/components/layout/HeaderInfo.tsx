@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import api from "@/lib/api";
+import api, { tenantDeletedEvent } from "@/lib/api";
 import useStore from "@/store";
 import type { Building, PaginatedResponse } from "@/types";
 
@@ -28,11 +28,31 @@ const HeaderInfo = () => {
 
   // Charger les tenants pour SUPER_ADMIN
   useEffect(() => {
-    if (isSuperAdmin) {
-      api.get("/api/v1/tenants")
-        .then(res => setTenants(res.data || []))
+    if (!isSuperAdmin) return;
+
+    let controller: AbortController | undefined;
+    const loadTenants = () => {
+      controller?.abort();
+      const request = new AbortController();
+      controller = request;
+      api.get("/api/v1/tenants", { signal: request.signal })
+        .then(res => {
+          if (!request.signal.aborted) setTenants(res.data || []);
+        })
         .catch(() => {});
-    }
+    };
+    const removeTenant = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      setTenants(current => current.filter(tenant => tenant.id !== id));
+      loadTenants();
+    };
+
+    loadTenants();
+    window.addEventListener(tenantDeletedEvent, removeTenant);
+    return () => {
+      controller?.abort();
+      window.removeEventListener(tenantDeletedEvent, removeTenant);
+    };
   }, [isSuperAdmin]);
 
   // Charger le premier bâtiment du tenant courant

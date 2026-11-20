@@ -107,7 +107,10 @@ async function insertReading(
   time: Date | null
 ): Promise<void> {
   await query(
-    'INSERT INTO sensor_readings (time, tenant_id, device_id, metric, value, unit) VALUES (COALESCE($1::timestamptz, NOW()), $2, $3, $4, $5, $6)',
+    `INSERT INTO sensor_readings (time, tenant_id, device_id, metric, value, unit)
+     SELECT COALESCE($1::timestamptz, NOW()), "id"::uuid, $3::uuid, $4, $5, $6
+     FROM "Tenant" WHERE "id" = $2
+     FOR KEY SHARE`,
     [time, tenantId, deviceId, metric, value, unit]
   );
 }

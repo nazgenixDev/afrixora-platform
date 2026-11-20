@@ -3,6 +3,8 @@ import { redirectToLogin } from "./auth";
 import { API_URL } from "./config";
 import useStore from "@/store";
 
+export const tenantDeletedEvent = "afrixora:tenant-deleted";
+
 const api = axios.create({
   baseURL: API_URL,
   headers: { "Content-Type": "application/json" },
