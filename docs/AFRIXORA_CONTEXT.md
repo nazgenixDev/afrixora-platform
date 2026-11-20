@@ -15,7 +15,18 @@
 
 **What it is:** A B2B SaaS IoT platform for intelligent building management in Africa. It connects IoT sensors and devices to a cloud dashboard, enabling energy monitoring, device control, and automation for commercial buildings.
 
-**Business model:** SaaS subscription — 8/12/15 USD/unit/month + setup fee 1,500–8,000 USD.
+### Subscription pricing
+
+The plans and prices displayed in the [subscription page](../frontend/src/app/(dashboard)/subscription/page.tsx) are the pricing reference for AFRIXORA.
+
+| Plan | Monthly price |
+| --- | --- |
+| `BASIC` | 9 USD |
+| `PRO` | 29 USD |
+| `BUSINESS` | 79 USD |
+| `ENTERPRISE` | Custom quote |
+
+Earlier commercial materials described three prices per unit (8, 12, or 15 USD per month) and a one-time setup fee of 1,500–8,000 USD. The application displays a monthly price per tenant plan and has no per-unit rate or setup fee in its pricing table. The [Prisma schema](../backend/prisma/schema.prisma) stores the plan and subscription status, and the [backend plan definitions](../backend/src/utils/plans.ts) apply limits and feature access.
 
 **Critical constraints:**
 - Offline-first — frequent power cuts (2–8h/day) in RDC. Data must never be lost.
@@ -242,159 +253,21 @@ afrixora-platform/
 
 ## 5. Core Domain Models (Updated)
 
-### Prisma Models
+### Prisma models
 
-```prisma
-model Tenant {
-  id        String   @id @default(uuid())
-  name      String
-  slug      String   @unique
-  plan      Plan     @default(CORE)
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  users     User[]
-  buildings Building[]
-}
+See [`backend/prisma/schema.prisma`](../backend/prisma/schema.prisma) for all models, relations, and indexes.
 
-model User {
-  id           String   @id @default(uuid())
-  tenantId     String
-  email        String   @unique
-  passwordHash String
-  name         String
-  role         Role     @default(OPERATOR)
-  jwtVersion   Int      @default(0)
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  @@index([tenantId])
-}
+| Enum | Values |
+| --- | --- |
+| `SubscriptionPlan` | `BASIC`, `PRO`, `BUSINESS`, `ENTERPRISE` |
+| `SubscriptionStatus` | `ACTIVE`, `PAST_DUE`, `CANCELED`, `TRIAL` |
+| `AlertType` | `THRESHOLD`, `OFFLINE`, `AUTOMATION`, `SYSTEM` |
 
-model Building {
-  id         String   @id @default(uuid())
-  tenantId   String
-  name       String
-  address    String
-  city       String   @default("Lubumbashi")
-  unitsCount Int      @default(0)
-  config     Json     @default("{}")
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  zones      Zone[]
-  devices    Device[]
-  @@index([tenantId])
-}
+`Tenant.plan` defaults to `BASIC`. `Tenant.subscriptionStatus` defaults to `ACTIVE`. `SubscriptionHistory` records the tenant's plan, status, and optional payment metadata. `ApiKey` stores the key hash and prefix.
 
-model Zone {
-  id         String   @id @default(uuid())
-  tenantId   String
-  buildingId String
-  name       String
-  floor      Int      @default(0)
-  type       ZoneType @default(ROOM)
-  devices    Device[]
-  @@index([tenantId])
-  @@index([buildingId])
-}
+### TimescaleDB — `sensor_readings`
 
-model Device {
-  id         String     @id @default(uuid())
-  tenantId   String
-  buildingId String
-  zoneId     String?
-  name       String
-  type       DeviceType
-  protocol   Protocol   @default(MQTT)
-  macAddress String?    @unique
-  isOnline   Boolean    @default(false)
-  lastSeen   DateTime?
-  config     Json       @default("{}")
-  metadata   Json       @default("{}")
-  createdAt  DateTime   @default(now())
-  states     DeviceState[]
-  @@index([tenantId, buildingId])
-  @@index([isOnline])
-}
-
-model DeviceState {
-  id        String   @id @default(uuid())
-  deviceId  String   @unique
-  tenantId  String
-  state     Json
-  updatedAt DateTime @updatedAt
-}
-
-model Automation {
-  id          String    @id @default(uuid())
-  tenantId    String
-  buildingId  String
-  name        String
-  isActive    Boolean   @default(true)
-  trigger     Json
-  conditions  Json      @default("[]")
-  action      Json
-  lastFiredAt DateTime?
-  createdAt   DateTime  @default(now())
-  @@index([tenantId, buildingId, isActive])
-}
-
-model Alert {
-  id         String    @id @default(uuid())
-  tenantId   String
-  buildingId String
-  deviceId   String?
-  type       AlertType
-  severity   Severity  @default(WARNING)
-  message    String
-  metadata   Json      @default("{}")
-  isRead     Boolean   @default(false)
-  resolvedAt DateTime?
-  createdAt  DateTime  @default(now())
-  @@index([tenantId, buildingId, isRead])
-}
-
-model Gateway {
-  id         String    @id @default(uuid())
-  tenantId   String
-  buildingId String
-  name       String
-  isOnline   Boolean   @default(false)
-  lastSeen   DateTime?
-  version    String?
-  @@index([tenantId])
-  @@index([buildingId])
-}
-
-// NEW: API Key management
-model ApiKey {
-  id        String    @id @default(uuid())
-  tenantId  String
-  name      String
-  key       String    @unique
-  scope     String    @default("full")
-  isActive  Boolean   @default(true)
-  requests  Int       @default(0)
-  limit     Int       @default(50000)
-  lastUsed  DateTime?
-  createdAt DateTime  @default(now())
-  @@index([tenantId])
-}
-
-// NEW: API request logging
-model ApiLog {
-  id         String   @id @default(uuid())
-  tenantId   String
-  method     String
-  endpoint   String
-  statusCode Int
-  durationMs Int
-  ip         String
-  userId     String?
-  createdAt  DateTime @default(now())
-  @@index([tenantId, createdAt(sort: Desc)])
-}
-
-TimescaleDB — sensor_readings
-
+```sql
 CREATE TABLE sensor_readings (
   time       TIMESTAMPTZ    NOT NULL,
   tenant_id  UUID           NOT NULL,
@@ -406,6 +279,7 @@ CREATE TABLE sensor_readings (
 SELECT create_hypertable('sensor_readings', 'time');
 CREATE INDEX ON sensor_readings (device_id, time DESC);
 CREATE INDEX ON sensor_readings (tenant_id, time DESC);
+```
 
 6. REST API — Complete Endpoints
 Authentication

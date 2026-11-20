@@ -11,20 +11,31 @@ https://afrixora.cd
 - Infrastructure : Docker + Docker Compose + Traefik v3 + Cloudflare Tunnel
 
 ## Démarrage rapide
+
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
-cd backend && npm run dev
-cd frontend && npm run dev
-Layer 0 → IoT Devices
-Layer 1 → Edge Gateway (Raspberry Pi)
-Layer 2 → Data & Messaging (TimescaleDB / Redis / Mosquitto)
-Layer 3 → Backend API (Express.js + Socket.IO)
-Layer 4 → Frontend Dashboard (Next.js 14)
+```
+
+Pour lancer les processus de développement locaux, exécutez chaque commande dans un terminal distinct.
+
+```bash
+(cd backend && npm run dev)
+(cd frontend && npm run dev)
+```
+
+## Architecture
+
+- Layer 0 → IoT Devices
+- Layer 1 → Edge Gateway (Raspberry Pi)
+- Layer 2 → Data & Messaging (TimescaleDB / Redis / Mosquitto)
+- Layer 3 → Backend API (Express.js + Socket.IO)
+- Layer 4 → Frontend Dashboard (Next.js 14)
 
 ### docker-compose.yml
 
-```bash
-cat > docker-compose.yml << 'EOF'
+Exemple de structure. La configuration du dépôt se trouve dans [docker-compose.yml](docker-compose.yml).
+
+```yaml
 services:
   postgres:
     image: timescale/timescaledb:latest-pg15
@@ -92,3 +103,18 @@ volumes:
 networks:
   afrixora_net:
     driver: bridge
+```
+
+## Tests backend
+
+Les tests unitaires RBAC et les tests d’intégration HTTP s’exécutent avec `npm test` depuis `backend`. Les tests HTTP utilisent une base PostgreSQL de test dédiée, déjà créée. Prisma y applique les migrations avant l’exécution. Le seed, TimescaleDB, Redis et MQTT ne sont pas requis.
+
+```bash
+cd backend
+npm ci
+export DATABASE_URL='postgresql://utilisateur:mot_de_passe@127.0.0.1:5432/afrixora_test'
+npx prisma migrate deploy
+npm test
+```
+
+Remplacez les identifiants d’exemple par ceux de la base de test. La suite crée quatre tenants avec des identifiants uniques et supprime ses données après les tests. Les secrets JWT de test sont générés par la suite.
