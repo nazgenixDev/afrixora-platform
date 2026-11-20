@@ -100,7 +100,7 @@ expect_status 403 'Réinitialisation du mot de passe d’un SUPER_ADMIN'
 request DELETE "users/$super_id" "$TENANT_ADMIN_TOKEN"
 expect_status 403 'Suppression d’un SUPER_ADMIN'
 
-request POST auth/login '' "$login_payload"
+request POST auth/token '' "$login_payload"
 expect_status 200 'Connexion du VIEWER'
 old_token=$(jq -er '.accessToken | strings | select(length > 0)' <<<"$body")
 request GET users/me "$old_token"
@@ -112,7 +112,7 @@ jq -e '.role == "OPERATOR"' <<<"$body" >/dev/null
 request GET users/me "$old_token"
 expect_status 401 'Ancien JWT refusé après le changement de rôle'
 
-request POST auth/login '' "$login_payload"
+request POST auth/token '' "$login_payload"
 expect_status 200 'Reconnexion de l’OPERATOR'
 operator_token=$(jq -er '.accessToken | strings | select(length > 0)' <<<"$body")
 request GET users/me "$operator_token"
@@ -131,7 +131,7 @@ expect_status 401 'JWT d’avant la désactivation toujours refusé après réac
 request PATCH "users/$member_id/role" "$TENANT_ADMIN_TOKEN" '{"role":"TENANT_ADMIN"}'
 expect_status 200 'Attribution de TENANT_ADMIN dans le même tenant'
 jq -e '.role == "TENANT_ADMIN"' <<<"$body" >/dev/null
-request POST auth/login '' "$login_payload"
+request POST auth/token '' "$login_payload"
 expect_status 200 'Connexion du TENANT_ADMIN temporaire'
 member_admin_token=$(jq -er '.accessToken | strings | select(length > 0)' <<<"$body")
 request PATCH "users/$member_id/role" "$member_admin_token" '{"role":"VIEWER"}'

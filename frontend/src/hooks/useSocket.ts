@@ -1,18 +1,17 @@
 import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { isAxiosError } from 'axios';
 import { logger } from '@/lib/logger';
 import useStore from '@/store';
+import { refreshSession } from '@/lib/api';
+import { API_URL } from '@/lib/config';
+import { redirectToLogin } from '@/lib/auth';
 
 interface UseSocketOptions {
   buildingId?: string;
   enabled?: boolean;
 }
 
-/**
- * Hook for managing Socket.IO connection to the AFRIXORA backend
- * Handles authentication, room joining, and event listening
- * L'authentification utilise le cookie httpOnly, avec repli localStorage en développement.
- */
 const useSocket = ({ buildingId, enabled = true }: UseSocketOptions = {}) => {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -27,18 +26,34 @@ const useSocket = ({ buildingId, enabled = true }: UseSocketOptions = {}) => {
       return;
     }
 
-    // Initialize socket connection (cookie httpOnly envoyé auto via withCredentials)
-    const token = process.env.NODE_ENV === 'development' ? localStorage.getItem('afrixora_token') : null;
-    const socketInstance = io(process.env.NEXT_PUBLIC_API_URL || '', {
+    const socketInstance = io(API_URL, {
       withCredentials: true,
-      ...(token ? { auth: { token } } : {}),
       transports: ['websocket'],
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
     });
+    let disposed = false;
+    let authenticationRetried = false;
+
+    async function reconnectWithSession() {
+      if (disposed || authenticationRetried) return;
+      authenticationRetried = true;
+      try {
+        await refreshSession();
+        if (!disposed) socketInstance.connect();
+      } catch (error) {
+        if (disposed) return;
+        if (isAxiosError(error) && error.response?.status === 401) {
+          redirectToLogin();
+        } else {
+          setError('La session ne permet plus la connexion en temps réel.');
+        }
+      }
+    }
 
     // Connection event handlers
     socketInstance.on('connect', () => {
+      authenticationRetried = false;
       setIsConnected(true);
       setError(null);
       
@@ -49,6 +64,10 @@ const useSocket = ({ buildingId, enabled = true }: UseSocketOptions = {}) => {
 
     socketInstance.on('connect_error', (err) => {
       setIsConnected(false);
+      if (err.message === 'Unauthorized' && !authenticationRetried) {
+        void reconnectWithSession();
+        return;
+      }
       setError(`Connection error: ${err.message}`);
       logger.error('Erreur de connexion Socket.IO', err);
     });
@@ -56,6 +75,7 @@ const useSocket = ({ buildingId, enabled = true }: UseSocketOptions = {}) => {
     socketInstance.on('disconnect', (reason) => {
       setIsConnected(false);
       logger.debug('Socket.IO déconnecté', { reason });
+      if (reason === 'io server disconnect') void reconnectWithSession();
     });
 
     // Data event handlers
@@ -96,6 +116,7 @@ const useSocket = ({ buildingId, enabled = true }: UseSocketOptions = {}) => {
 
     // Cleanup on unmount
     return () => {
+      disposed = true;
       if (socketInstance) {
         socketInstance.off('connect');
         socketInstance.off('connect_error');

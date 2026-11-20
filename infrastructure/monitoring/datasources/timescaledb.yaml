@@ -8,9 +8,9 @@ datasources:
     type: postgres
     access: proxy
     url: postgres:5432
-    user: afrixora
+    user: afrixora_grafana
     secureJsonData:
-      password: $DB_PASSWORD
+      password: $DB_GRAFANA_PASSWORD
     jsonData:
       database: afrixora_prod
       sslmode: disable

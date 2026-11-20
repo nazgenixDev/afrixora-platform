@@ -6,6 +6,8 @@ import { validate } from "../middleware/validate";
 import { changeUserRole, createUser, deleteUser, resetUserPassword, toggleUserStatus } from "../services/userService";
 import prisma from "../utils/database";
 import bcrypt from "bcryptjs";
+import { newPasswordSchema } from "../utils/passwordPolicy";
+import { limitSchema, pageSchema } from "../utils/querySchemas";
 
 const router = Router();
 
@@ -16,7 +18,7 @@ const createUserSchema = z.object({
     email: z.string().email("Email invalide"),
     name: z.string().min(1, "Nom requis"),
     role: z.enum(["SUPER_ADMIN", "TENANT_ADMIN", "BUILDING_ADMIN", "OPERATOR", "VIEWER"]),
-    password: z.string().min(6, "6 caractères minimum"),
+    password: newPasswordSchema,
   }),
 });
 
@@ -28,17 +30,18 @@ const changeRoleSchema = z.object({
 
 const resetPasswordSchema = z.object({
   body: z.object({
-    newPassword: z.string().min(6, "6 caractères minimum"),
+    newPassword: newPasswordSchema,
   }),
 });
 
 const changePasswordSchema = z.object({
   body: z.object({
-    currentPassword: z.string().min(1, "Mot de passe actuel requis"),
-    newPassword: z.string().min(6, "6 caractères minimum"),
+    currentPassword: z.string().min(1, "Mot de passe actuel requis").max(1024),
+    newPassword: newPasswordSchema,
   }),
 });
 
+const paginationSchema = z.object({ page: pageSchema, limit: limitSchema.default(50) });
 // ─── Routes ───────────────────────────────────────────────────
 
 // Récupérer son propre profil (tout utilisateur connecté)
@@ -74,8 +77,7 @@ router.get(
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const page = parseInt(req.query.page as string, 10) || 1;
-      const limit = parseInt(req.query.limit as string, 10) || 50;
+      const { page, limit } = paginationSchema.parse(req.query);
       const skip = (page - 1) * limit;
 
       const [users, total] = await Promise.all([

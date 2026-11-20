@@ -114,6 +114,7 @@ model Building {
   gateways    Gateway[]
 
   @@index([tenantId])
+  @@unique([id, tenantId])
 }
 
 model Zone {
@@ -128,6 +129,7 @@ model Zone {
 
   @@index([tenantId])
   @@index([buildingId])
+  @@unique([id, tenantId, buildingId])
 }
 
 model Device {
@@ -151,6 +153,8 @@ model Device {
 
   @@index([tenantId, buildingId])
   @@index([isOnline])
+  @@unique([id, tenantId])
+  @@unique([id, tenantId, buildingId])
 }
 
 model DeviceState {

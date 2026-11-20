@@ -9,22 +9,16 @@ const logger = winston.createLogger({
   ),
   defaultMeta: { service: 'afrixora-backend' },
   transports: [
-    // Write all logs to console
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.simple()
-      ),
-    }),
+    new winston.transports.Console(),
   ],
 });
 
 // Add file transports in production
 if (process.env.NODE_ENV !== 'development') {
   logger.add(
-    new winston.transports.File({ filename: 'logs/error.log', level: 'error' })
+    new winston.transports.File({ filename: 'logs/error.log', level: 'error', maxsize: 5 * 1024 * 1024, maxFiles: 4 })
   );
-  logger.add(new winston.transports.File({ filename: 'logs/combined.log' }));
+  logger.add(new winston.transports.File({ filename: 'logs/combined.log', maxsize: 5 * 1024 * 1024, maxFiles: 4 }));
 }
 
 export default logger;

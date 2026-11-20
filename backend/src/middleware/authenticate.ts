@@ -1,14 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
 import { prisma } from '../utils/database';
 import logger from '../utils/logger';
-
-interface TokenPayload {
-  userId: string;
-  tenantId: string;
-  role: string;
-  jwtVersion: number;
-}
+import { verifyAccessToken } from '../utils/sessionTokens';
 
 // Certains routeurs appliquent le middleware de session à deux niveaux.
 const authenticatedRequests = new WeakSet<Request>();
@@ -23,35 +16,23 @@ declare module 'express-serve-static-core' {
   }
 }
 
+export function requestAccessToken(req: Request): unknown {
+  if (req.cookies?.access_token) return req.cookies.access_token;
+  const bearer = /^Bearer (\S+)$/i.exec(req.get('Authorization') ?? '');
+  return bearer?.[1];
+}
+
 export const authenticate = async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (authenticatedRequests.has(req)) return next();
-
-    // Lire le token depuis le cookie httpOnly (prioritaire) ou depuis l'header Authorization (fallback API key)
-    let token: string | undefined;
-
-    // 1. Essayer le cookie httpOnly
-    if (req.cookies?.access_token) {
-      token = req.cookies.access_token;
-    }
-
-    // 2. Fallback: header Authorization (pour les clients qui ne supportent pas les cookies)
-    if (!token) {
-      const authHeader = req.headers.authorization;
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        token = authHeader.split(' ')[1];
-      }
-    }
-
+    const token = requestAccessToken(req);
     if (!token) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    let decoded: TokenPayload;
-    try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET!) as TokenPayload;
-    } catch (error) {
-      logger.warn('JWT verification failed', { error });
+    const decoded = verifyAccessToken(token);
+    if (!decoded) {
+      logger.warn('auth.access_token_refused');
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
@@ -60,7 +41,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
       select: { jwtVersion: true, isActive: true, role: true, tenantId: true, tenant: { select: { isActive: true } } },
     });
 
-    if (!user || !user.isActive || user.jwtVersion !== decoded.jwtVersion) {
+    if (!user || !user.isActive || user.jwtVersion !== decoded.jwtVersion || user.tenantId !== decoded.tenantId) {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
@@ -86,8 +67,8 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
     req.user = { userId: decoded.userId, tenantId, role: user.role };
     authenticatedRequests.add(req);
     return next();
-  } catch (error) {
-    logger.error('Authentication error', { error });
+  } catch {
+    logger.error('auth.verification_unavailable');
     return res.status(500).json({ error: 'Internal server error' });
   }
 };

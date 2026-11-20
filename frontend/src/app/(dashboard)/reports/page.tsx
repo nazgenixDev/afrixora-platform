@@ -14,7 +14,7 @@ interface Building {
   name: string;
 }
 
-const ReportsPage = (): JSX.Element => {
+const ReportsPage = () => {
   const { limits, loading: limitsLoading } = useSubscriptionLimits();
   const router = useRouter();
 

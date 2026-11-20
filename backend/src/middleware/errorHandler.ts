@@ -3,6 +3,8 @@ import { ZodError } from 'zod';
 import { Prisma } from '@prisma/client';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
 import logger from '../utils/logger';
+import { AppError } from '../utils/errors';
+import { routePath } from '../utils/requestRoute';
 
 /**
  * Global error handler middleware
@@ -14,24 +16,11 @@ export const errorHandler = (
   res: Response,
   _next: NextFunction
 ) => {
-  // Log the error with details
-  logger.error('Error occurred', {
-    error: {
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-    },
-    path: req.path,
-    method: req.method,
-    ip: req.ip,
-    userId: req.user?.userId,
-  });
-
   // Handle Zod validation errors (400 Bad Request)
   if (error instanceof ZodError) {
     return res.status(400).json({
       error: 'Validation error',
-      details: error.errors,
+      details: error.issues.map(({ code, path, message }) => ({ code, path, message })),
       code: 'VALIDATION_ERROR',
     });
   }
@@ -57,7 +46,7 @@ export const errorHandler = (
     }
 
     // Handle record not found (404 Not Found)
-    if (error.code === 'P2001' || error.code === 'P2018') {
+    if (error.code === 'P2001' || error.code === 'P2018' || error.code === 'P2025') {
       return res.status(404).json({
         error: 'Resource not found',
         code: 'RESOURCE_NOT_FOUND',
@@ -65,6 +54,7 @@ export const errorHandler = (
     }
 
     // Other Prisma errors (500 Internal Server Error)
+    logger.error('database_request_failed', { code: error.code, route: routePath(req), method: req.method });
     return res.status(500).json({
       error: 'Database error',
       code: `PRISMA_${error.code}`,
@@ -79,21 +69,18 @@ export const errorHandler = (
     });
   }
 
-  // Handle custom errors with status code
-  interface CustomError extends Error {
-    statusCode: number;
-    code?: string;
-  }
-
-  if ('statusCode' in error && typeof (error as Error & { statusCode: unknown }).statusCode === 'number') {
-    const customError = error as CustomError;
-    return res.status(customError.statusCode).json({
-      error: customError.message || 'Error occurred',
-      code: customError.code || 'UNKNOWN_ERROR',
+  if (error instanceof AppError) {
+    return res.status(error.statusCode).json({
+      error: error.message,
+      code: error.code,
     });
   }
 
-  // Default error handler (500 Internal Server Error)
+  if ('status' in error && typeof error.status === 'number' && error.status >= 400 && error.status < 500) {
+    return res.status(error.status).json({ error: 'Requête invalide', code: 'INVALID_REQUEST' });
+  }
+
+  logger.error('http_request_failed', { errorType: error.name, route: routePath(req), method: req.method });
   return res.status(500).json({
     error: 'Internal server error',
     code: 'INTERNAL_SERVER_ERROR',

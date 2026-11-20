@@ -284,8 +284,9 @@ CREATE INDEX ON sensor_readings (tenant_id, time DESC);
 6. REST API — Complete Endpoints
 Authentication
 Method	Endpoint	Description
-POST	/auth/login	Pose les cookies `access_token` et `refresh_token`, renvoie `{ user, accessToken }`
-POST	/auth/refresh	Vérifie le cookie `refresh_token` et renouvelle `access_token`
+POST	/auth/login	Pose les cookies de session et renvoie `{ user }`
+POST	/auth/token	Renvoie `{ user, accessToken }` aux clients Bearer hors navigateur
+POST	/auth/refresh	Fait tourner le cookie de renouvellement et renouvelle le cookie d’accès
 GET	/auth/me	Renvoie le profil courant sous la forme `{ user }`
 POST	/auth/logout	Incrémente `jwtVersion` et efface les deux cookies
 Buildings & Zones
@@ -342,7 +343,7 @@ API Keys (NEW)
 Method	Endpoint	Description
 GET	/api-keys	List API keys
 POST	/api-keys	Generate new key
-PATCH	/api-keys/:id/toggle	Revoke/reactivate key
+PATCH	/api-keys/:id/revoke	Révoque définitivement la clé
 API Logs (NEW)
 Method	Endpoint	Description
 GET	/api-logs	List recent API requests
@@ -424,13 +425,12 @@ Non-admin roles see: Dashboard, Buildings, Devices, Energy, Reports, Settings
 
 Settings page available to all authenticated users
 
-Authentification après le lot P0
+Authentification et révocation
 
-- `POST /auth/login` pose `access_token` (15 minutes) et `refresh_token` (7 jours) dans des cookies `HttpOnly` et `SameSite=Lax`, avec `Secure` en production. Le JSON de connexion contient également `accessToken`. En développement uniquement, le frontend conserve cette valeur dans `localStorage` sous `afrixora_token` et l’envoie dans `Authorization: Bearer …`.
-- `authenticate.ts` privilégie le cookie d’accès, puis lit le Bearer en son absence. Il vérifie la signature, l’activité de l’utilisateur, sa `jwtVersion` et l’activité du tenant, avec une exception sur l’activité du tenant pour `SUPER_ADMIN`. Les routes montées avec `authenticateOrApiKey` exigent actuellement un en-tête Bearer ou `x-api-key` pour sélectionner leur middleware, même lorsque le cookie est présent.
-- Pour un JWT valide de `SUPER_ADMIN`, `authenticate.ts` accepte actuellement `x-tenant-id` comme tenant courant de la requête sans vérifier l’existence du tenant demandé. Les routes compatibles avec les clés API utilisent le tenant associé à la clé vérifiée.
+- Le navigateur utilise les cookies `HttpOnly` et `SameSite=Lax`, avec `Secure` en production. Les clients hors navigateur utilisent `POST /auth/token` pour obtenir un jeton Bearer.
+- Le serveur vérifie la signature, la version, l’activité de l’utilisateur et celle du tenant. `SUPER_ADMIN` conserve son accès d’administration et peut sélectionner un tenant existant via `x-tenant-id`. Les clés API utilisent leur propre tenant.
 - Au chargement du tableau de bord, le frontend récupère le profil via `GET /api/v1/auth/me`. Axios utilise `withCredentials`. Après un 401 hors connexion et rafraîchissement, l’intercepteur tente une fois `POST /api/v1/auth/refresh`, puis rejoue la requête initiale. Si le rafraîchissement échoue ou que la requête rejouée renvoie 401, il redirige vers `/login`.
-- Le rafraîchissement vérifie la signature et la session associée au cookie `refresh_token`, puis pose un nouveau cookie d’accès. En développement, le JSON du rafraîchissement fournit aussi `accessToken` pour mettre à jour le repli local. Un mauvais identifiant à la connexion ou un jeton de rafraîchissement invalide produit une erreur 401 `INVALID_CREDENTIALS` avec le message générique « Identifiants invalides ».
+- Le renouvellement remplace le jeton de renouvellement en Redis jusqu’à l’échéance fixe de sept jours. La déconnexion révoque les sessions du compte. Les connexions Socket.IO sont vérifiées à l’ouverture et revalidées pendant leur durée de vie.
 - La connexion est limitée à 10 tentatives par IP sur 15 minutes en production et à 100 hors production. Le rafraîchissement a sa propre limite de 30 tentatives par IP sur 15 minutes. Les limiteurs et le journal des requêtes utilisent `req.ip`. `TRUST_PROXY_HOPS` vaut 1 par défaut. Pour la chaîne Cloudflare Tunnel → Traefik → API, il faut valider en déploiement si la valeur 2 correspond au trajet réel.
 
 9. Development Workflow (Completed)

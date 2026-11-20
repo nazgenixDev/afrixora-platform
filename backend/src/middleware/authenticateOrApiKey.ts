@@ -3,7 +3,7 @@ import { authenticate } from "./authenticate";
 import { apiKeyAuth } from "./apiKeyAuth";
 
 export const authenticateOrApiKey = async (req: Request, res: Response, next: NextFunction) => {
-  if (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
+  if (/^Bearer /i.test(req.headers.authorization ?? "")) {
     return authenticate(req, res, next);
   }
   if (req.headers["x-api-key"]) {

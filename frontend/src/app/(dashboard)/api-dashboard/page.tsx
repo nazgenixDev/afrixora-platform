@@ -2,7 +2,6 @@
 import { useSubscriptionLimits } from "@/hooks/useSubscriptionLimits";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,12 +32,12 @@ const ALL_LOGS = "__all__";
 const API_KEY_SCOPES = [
   { value: "full", label: "Accès complet" },
   { value: "read", label: "Lecture seule" },
-  { value: "write", label: "Lecture + Écriture" },
+  { value: "write", label: "Lecture et pilotage des appareils" },
 ];
 
-const ApiDashboardPage = (): JSX.Element => {
+const ApiDashboardPage = () => {
   const { limits, loading: limitsLoading } = useSubscriptionLimits();
-  const router = useRouter();
+  const hasApi = limits?.hasApi === true;
 
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [logs, setLogs] = useState<ApiLog[]>([]);
@@ -53,38 +52,31 @@ const ApiDashboardPage = (): JSX.Element => {
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
   const [revokeTarget, setRevokeTarget] = useState<ApiKey | null>(null);
   const [revokeLoading, setRevokeLoading] = useState(false);
+  const [revokeError, setRevokeError] = useState(false);
   const [logsPage, setLogsPage] = useState(1);
   const [logsTotalPages, setLogsTotalPages] = useState(1);
   const [filterMethod, setFilterMethod] = useState(ALL_LOGS);
   const [filterStatus, setFilterStatus] = useState(ALL_LOGS);
   const [filterEndpoint, setFilterEndpoint] = useState("");
 
-  // Rediriger si le plan ne donne pas accès à l'API
   useEffect(() => {
-    if (!limitsLoading && limits && !limits.hasApi) {
-      router.push("/");
-    }
-  }, [limits, limitsLoading, router]);
-
-  const fetchKeys = async () => {
-    const res = await api.get("/api/v1/api-keys");
-    const raw = res.data;
-    setKeys(Array.isArray(raw) ? raw : (raw?.data ?? []));
-  };
-
-  const fetchStats = async () => {
-    try {
-      const res = await api.get("/api/v1/api-logs/stats");
-      setStats(res.data);
-    } catch (err) { logger.error(String(err)); }
-  };
-
-  useEffect(() => {
-    Promise.all([fetchKeys(), fetchStats()])
-      .catch(error => logger.error(String(error)))
-      .finally(() => setLoading(false));
+    const request = new AbortController();
+    api.get<ApiKey[]>("/api/v1/api-keys", { signal: request.signal })
+      .then(({ data }) => { if (!request.signal.aborted) setKeys(data); })
+      .catch(error => { if (!request.signal.aborted) logger.error(String(error)); })
+      .finally(() => { if (!request.signal.aborted) setLoading(false); });
+    return () => request.abort();
   }, []);
   useEffect(() => {
+    if (!hasApi) return;
+    const request = new AbortController();
+    api.get<MonitoringStats>("/api/v1/api-logs/stats", { signal: request.signal })
+      .then(({ data }) => { if (!request.signal.aborted) setStats(data); })
+      .catch(error => { if (!request.signal.aborted) logger.error(String(error)); });
+    return () => request.abort();
+  }, [hasApi]);
+  useEffect(() => {
+    if (!hasApi) return;
     const controller = new AbortController();
     const params = {
       page: logsPage,
@@ -101,7 +93,7 @@ const ApiDashboardPage = (): JSX.Element => {
       })
       .catch(error => { if (!controller.signal.aborted) logger.error(String(error)); });
     return () => controller.abort();
-  }, [logsPage, filterMethod, filterStatus, filterEndpoint]);
+  }, [hasApi, logsPage, filterMethod, filterStatus, filterEndpoint]);
 
   const keyName = newKeyName.trim();
   const canGenerateKey = keyName.length >= 1 && keyName.length <= API_KEY_NAME_MAX_LENGTH
@@ -143,9 +135,15 @@ const ApiDashboardPage = (): JSX.Element => {
   const confirmRevoke = async () => {
     if (!revokeTarget) return;
     setRevokeLoading(true);
-    await api.patch(`/api/v1/api-keys/${revokeTarget.id}/toggle`);
-    setRevokeTarget(null); setRevokeLoading(false);
-    fetchKeys();
+    try {
+      const { data } = await api.patch<ApiKey>(`/api/v1/api-keys/${revokeTarget.id}/revoke`);
+      setKeys(previous => previous.map(key => key.id === data.id ? data : key));
+      setRevokeTarget(null);
+    } catch {
+      setRevokeError(true);
+    } finally {
+      setRevokeLoading(false);
+    }
   };
 
   if (loading || limitsLoading) return <div className="flex items-center justify-center h-64">Chargement...</div>;
@@ -157,15 +155,15 @@ const ApiDashboardPage = (): JSX.Element => {
       <Tabs defaultValue="keys">
         <TabsList>
           <TabsTrigger value="keys">Clés API ({keys.length})</TabsTrigger>
-          <TabsTrigger value="logs">Logs requêtes</TabsTrigger>
-          <TabsTrigger value="monitor">Monitoring</TabsTrigger>
+          <TabsTrigger value="logs" disabled={!hasApi}>Logs requêtes</TabsTrigger>
+          <TabsTrigger value="monitor" disabled={!hasApi}>Monitoring</TabsTrigger>
         </TabsList>
 
         {/* === KEYS === */}
         <TabsContent value="keys" className="space-y-4 mt-4">
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">{keys.filter(k => k.isActive).length} active(s) / {keys.length} totale(s)</p>
-            <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => { setCreationError(false); setShowGen(true); }}>+ Nouvelle clé</Button>
+            {hasApi && <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => { setCreationError(false); setShowGen(true); }}>+ Nouvelle clé</Button>}
           </div>
           <div className="border rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
@@ -179,7 +177,7 @@ const ApiDashboardPage = (): JSX.Element => {
                     <td className="p-3"><div className="text-xs">{k.requests.toLocaleString()} / {k.limit.toLocaleString()}</div><div className="h-1 bg-muted rounded-full mt-1 overflow-hidden"><div className={`h-full rounded-full ${k.requests/k.limit>0.8?"bg-red-500":k.requests/k.limit>0.6?"bg-orange-500":"bg-emerald-500"}`} style={{width:`${Math.min(100,(k.requests/k.limit)*100)}%`}}/></div></td>
                     <td className="p-3"><Badge variant={k.isActive?"default":"destructive"}>{k.isActive?"Actif":"Révoqué"}</Badge></td>
                     <td className="p-3 text-xs text-muted-foreground">{k.lastUsed?new Date(k.lastUsed).toLocaleString():"Jamais"}</td>
-                    <td className="p-3"><Button variant="ghost" size="sm" onClick={() => setRevokeTarget(k)}>{k.isActive?"✕ Révoquer":"↩ Réactiver"}</Button></td>
+                    <td className="p-3">{k.isActive && <Button variant="ghost" size="sm" onClick={() => { setRevokeError(false); setRevokeTarget(k); }}>Révoquer</Button>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -301,17 +299,16 @@ const ApiDashboardPage = (): JSX.Element => {
       <Dialog open={!!revokeTarget} onOpenChange={() => setRevokeTarget(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{revokeTarget?.isActive ? "Révoquer la clé" : "Réactiver la clé"}</DialogTitle>
+            <DialogTitle>Révoquer la clé</DialogTitle>
             <DialogDescription>
-              {revokeTarget?.isActive
-                ? `Êtes-vous sûr de vouloir révoquer la clé "${revokeTarget?.name}" ? Les applications qui l'utilisent ne pourront plus accéder à l'API.`
-                : `Voulez-vous réactiver la clé "${revokeTarget?.name}" ?`}
+              La révocation de la clé « {revokeTarget?.name} » est définitive.
             </DialogDescription>
           </DialogHeader>
+          {revokeError && <p role="alert" className="text-sm text-destructive">La clé n’a pas pu être révoquée.</p>}
           <DialogFooter className="mt-4">
             <Button variant="outline" onClick={() => setRevokeTarget(null)}>Annuler</Button>
-            <Button variant={revokeTarget?.isActive ? "destructive" : "default"} onClick={confirmRevoke} disabled={revokeLoading}>
-              {revokeLoading ? "En cours..." : revokeTarget?.isActive ? "Révoquer" : "Réactiver"}
+            <Button variant="destructive" onClick={confirmRevoke} disabled={revokeLoading}>
+              {revokeLoading ? "En cours..." : "Révoquer"}
             </Button>
           </DialogFooter>
         </DialogContent>

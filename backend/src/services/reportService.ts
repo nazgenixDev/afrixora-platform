@@ -3,6 +3,15 @@ import PDFDocument from 'pdfkit';
 import { format } from 'date-fns';
 import { avgPowerSql, buildingDevicesSql, energySamplesSql, totalEnergySql } from './energyQueries';
 import logger from '../utils/logger';
+import { AppError, NotFoundError } from '../utils/errors';
+
+const maxCsvRows = 50_000;
+
+function csvText(value: string | null) {
+  const text = value ?? '';
+  const safe = /^[\t\r\n]|^\s*[=+\-@＝＋－＠]/u.test(text) ? "'" + text : text;
+  return '"' + safe.replace(/"/g, '""') + '"';
+}
 
 /**
  * Generate a CSV report for a building's energy consumption
@@ -13,29 +22,27 @@ export const generateCSV = async (
   from: Date,
   to: Date
 ): Promise<string> => {
-  try {
-    const sql = `
-      WITH devices AS MATERIALIZED (${buildingDevicesSql})
-      SELECT sr.time, sr.device_id, sr.metric, sr.value, sr.unit, d.name as device_name
-      FROM sensor_readings sr
-      JOIN devices d ON sr.device_id = d.device_id
-      WHERE sr.tenant_id = $1::uuid
-        AND sr.time BETWEEN $3::timestamptz AND $4::timestamptz
-      ORDER BY sr.time ASC
-    `;
-    const result = await query(sql, [tenantId, buildingId, from.toISOString(), to.toISOString()]);
-
-    let csv = 'Timestamp,Device Name,Metric,Value,Unit\n';
-    for (const row of result.rows) {
-      const timestamp = format(new Date(row.time), 'yyyy-MM-dd HH:mm:ss');
-      csv += `${timestamp},"${row.device_name}",${row.metric},${row.value},${row.unit || ''}\n`;
-    }
-    logger.info('CSV report generated successfully', { tenantId, buildingId, rowCount: result.rows.length });
-    return csv;
-  } catch (error) {
-    logger.error('Error generating CSV report', { error: error instanceof Error ? error.message : String(error), tenantId, buildingId });
-    throw new Error('Failed to generate CSV report');
+  const sql = `
+    WITH devices AS MATERIALIZED (${buildingDevicesSql})
+    SELECT sr.time, sr.metric, sr.value, sr.unit, d.name as device_name
+    FROM sensor_readings sr
+    JOIN devices d ON sr.device_id = d.device_id
+    WHERE sr.tenant_id = $1::uuid
+      AND sr.time BETWEEN $3::timestamptz AND $4::timestamptz
+    ORDER BY sr.time ASC
+    LIMIT $5
+  `;
+  const result = await query(sql, [tenantId, buildingId, from.toISOString(), to.toISOString(), maxCsvRows + 1]);
+  if (result.rows.length > maxCsvRows) {
+    throw new AppError('Export trop volumineux. Réduisez la période.', 413, 'CSV_LIMIT_EXCEEDED');
   }
+
+  const rows = result.rows.map((row) => {
+    const timestamp = format(new Date(row.time), 'yyyy-MM-dd HH:mm:ss');
+    return [timestamp, csvText(row.device_name), csvText(row.metric), String(row.value), csvText(row.unit)].join(',');
+  });
+  logger.info('csv_report_generated', { tenantId, buildingId, rowCount: result.rows.length });
+  return ['Timestamp,Device Name,Metric,Value,Unit', ...rows, ''].join('\r\n');
 };
 
 /**
@@ -54,9 +61,9 @@ export const generatePDF = async (
     else from.setMonth(from.getMonth() - 1);
 
     // 1. Get building info
-    const bSql = `SELECT name, address, city FROM "Building" WHERE id = $1 AND "tenantId" = $2`;
+    const bSql = `SELECT name, address, city FROM "Building" WHERE id = $1 AND "tenantId" = $2 AND "isActive"`;
     const bRes = await query(bSql, [buildingId, tenantId]);
-    if (bRes.rows.length === 0) throw new Error('Building not found');
+    if (bRes.rows.length === 0) throw new NotFoundError('Bâtiment introuvable');
     const building = bRes.rows[0];
 
     const params = [tenantId, buildingId, from.toISOString(), to.toISOString()];
@@ -151,8 +158,8 @@ export const generatePDF = async (
     logger.info('PDF report generated successfully', { tenantId, buildingId });
     return pdfBuffer;
   } catch (error) {
-    logger.error('Error generating PDF report', { error: error instanceof Error ? error.message : String(error), tenantId, buildingId });
-    throw new Error('Failed to generate PDF report');
+    logger.error('Échec de la génération du rapport PDF', { tenantId, buildingId });
+    throw error;
   }
 };
 

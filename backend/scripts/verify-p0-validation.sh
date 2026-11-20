@@ -7,9 +7,10 @@ NODE_ENV=development ./node_modules/.bin/ts-node --files <<'TS'
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
+import { createRequire } from 'node:module';
 import { Socket } from 'node:net';
 import { test } from 'node:test';
-import { Prisma } from '@prisma/client';
+import { DeviceType, Prisma, SubscriptionStatus } from '@prisma/client';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 
@@ -19,6 +20,7 @@ test('P0-5 — validation HTTP et isolation des automatisations', async () => {
   const tenantId = 'tenant-test';
   const buildingId = 'building-test';
   const deviceId = 'device-test';
+  const sensorId = 'sensor-test';
   const automationId = 'automation-test';
   const foreignBuildingId = 'other-building';
   const foreignDeviceId = 'other-device';
@@ -28,10 +30,12 @@ test('P0-5 — validation HTTP et isolation des automatisations', async () => {
   const tenantSlugs = new Set<string>();
   const userEmails = new Set<string>();
   let savedApiKey: Prisma.ApiKeyUncheckedCreateInput | undefined;
+  let subscriptionStatus: SubscriptionStatus = 'ACTIVE';
   const devices = [
-    { id: deviceId, tenantId, buildingId },
-    { id: foreignDeviceId, tenantId: 'other-tenant', buildingId: foreignBuildingId },
-    { id: anotherBuildingDeviceId, tenantId, buildingId: anotherBuildingId },
+    { id: deviceId, tenantId, buildingId, type: DeviceType.LIGHT },
+    { id: sensorId, tenantId, buildingId, type: DeviceType.SENSOR },
+    { id: foreignDeviceId, tenantId: 'other-tenant', buildingId: foreignBuildingId, type: DeviceType.LIGHT },
+    { id: anotherBuildingDeviceId, tenantId, buildingId: anotherBuildingId, type: DeviceType.PLUG },
   ];
 
   Object.assign(globalThis, {
@@ -43,7 +47,7 @@ test('P0-5 — validation HTTP et isolation des automatisations', async () => {
         }),
       },
       tenant: {
-        findUnique: async () => ({ plan: 'ENTERPRISE' }),
+        findUnique: async () => ({ plan: 'ENTERPRISE', subscriptionStatus, subscriptionEndsAt: null, isActive: true }),
         create: async ({ data }: { data: Prisma.TenantCreateInput }) => {
           const admin = data.users?.create;
           assert(admin && 'passwordHash' in admin && admin.passwordHash.length > 8);
@@ -75,12 +79,12 @@ test('P0-5 — validation HTTP et isolation des automatisations', async () => {
           where.id === automationId && where.tenantId === tenantId ? { id: automationId, buildingId } : null,
         create: async ({ data }: { data: Prisma.AutomationUncheckedCreateInput }) => ({ id: automationId, ...data }),
         update: async ({ where, data }: { where: Prisma.AutomationWhereUniqueInput; data: Prisma.AutomationUpdateInput }) => {
-          assert.deepEqual(where, { id: automationId, tenantId });
+          assert.deepEqual(where, { id: automationId, tenantId, building: { tenantId, isActive: true } });
           assert.equal(data.conditions, undefined);
           return { id: automationId, isActive: data.isActive };
         },
         delete: async ({ where }: { where: Prisma.AutomationWhereUniqueInput }) => {
-          assert.deepEqual(where, { id: automationId, tenantId });
+          assert.deepEqual(where, { id: automationId, tenantId, building: { tenantId } });
         },
       },
       apiKey: {
@@ -91,6 +95,12 @@ test('P0-5 — validation HTTP et isolation des automatisations', async () => {
         },
       },
     },
+  });
+
+  // Le script utilise uniquement des routes simulées et n’ouvre aucune connexion Redis.
+  const requireFromBackend = createRequire(process.cwd() + '/package.json');
+  Object.assign(requireFromBackend.cache, {
+    [requireFromBackend.resolve('./src/utils/redis')]: { loaded: true, exports: {} },
   });
 
   const { default: automationRoutes } = await import('./src/routes/automations');
@@ -155,6 +165,11 @@ test('P0-5 — validation HTTP et isolation des automatisations', async () => {
   await expectStatus(404, 'POST', '/automations', { ...rule, trigger: { ...rule.trigger, deviceId: foreignDeviceId } });
   const command = { type: 'DEVICE_COMMAND', deviceId, command: 'turn_off' };
   await expectStatus(201, 'POST', '/automations', { ...rule, action: command });
+  await expectStatus(400, 'POST', '/automations', { ...rule, action: { ...command, deviceId: sensorId } });
+  const invalidCommand = JSON.parse(await expectStatus(400, 'POST', '/automations', {
+    ...rule, action: { ...command, command: 'set_state' },
+  }));
+  assert.equal(invalidCommand.code, 'VALIDATION_ERROR');
   await expectStatus(404, 'POST', '/automations', { ...rule, action: { ...command, deviceId: anotherBuildingDeviceId } });
   await expectStatus(404, 'PATCH', automationPath, { action: { ...command, deviceId: foreignDeviceId } });
 
@@ -172,6 +187,9 @@ test('P0-5 — validation HTTP et isolation des automatisations', async () => {
     assert.equal(savedApiKey.keyHash, createHash('sha256').update(created.key).digest('hex'));
     assert.equal('key' in savedApiKey, false);
   }
+  subscriptionStatus = 'PAST_DUE';
+  await expectStatus(403, 'POST', '/api-keys', { name: 'Test', scope: 'read' });
+  subscriptionStatus = 'ACTIVE';
 
   const tenant = {
     name: 'Client test', slug: 'client-test', plan: 'BUSINESS',

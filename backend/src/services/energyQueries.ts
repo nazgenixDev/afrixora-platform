@@ -2,10 +2,10 @@ import { query } from '../utils/database';
 
 export const energyTimeZone = 'Africa/Kinshasa';
 
-const periodHours: Record<string, number> = { '24h': 24, '7d': 168, '30d': 720, '3m': 2160 };
+const periodHours = { '24h': 24, '7d': 168, '30d': 720, '3m': 2160 };
+export type EnergyPeriod = keyof typeof periodHours;
 
-export const energyPeriodHours = (period: string) =>
-  Object.prototype.hasOwnProperty.call(periodHours, period) ? periodHours[period] : periodHours['30d'];
+export const energyPeriodHours = (period: EnergyPeriod) => periodHours[period];
 
 export const buildingDevicesSql = `
   SELECT id, id::uuid AS device_id, name, type, "zoneId"
@@ -58,10 +58,9 @@ export const avgPowerSql = `
   / NULLIF(SUM(sample_count) FILTER (WHERE metric = 'power_w'), 0)
 `;
 
-export async function latestPowerW(tenantId?: string, buildingId?: string) {
-  const result = tenantId !== undefined && buildingId !== undefined
-    ? await query(
-      `WITH devices AS MATERIALIZED (${buildingDevicesSql})
+export async function latestBuildingPowerW(tenantId: string, buildingId: string) {
+  const result = await query(
+    `WITH devices AS MATERIALIZED (${buildingDevicesSql})
        SELECT latest.value
        FROM devices d
        CROSS JOIN LATERAL (
@@ -74,15 +73,18 @@ export async function latestPowerW(tenantId?: string, buildingId?: string) {
        ) latest
        ORDER BY latest.time DESC, d.device_id
        LIMIT 1`,
-      [tenantId, buildingId]
-    )
-    : await query(
-      `SELECT value
+    [tenantId, buildingId]
+  );
+  return result.rows[0]?.value ?? null;
+}
+
+export async function latestGlobalPowerW() {
+  const result = await query(
+    `SELECT value
        FROM sensor_readings
        WHERE metric = 'power_w' AND time <= NOW()
        ORDER BY time DESC
        LIMIT 1`
-    );
-
+  );
   return result.rows[0]?.value ?? null;
 }

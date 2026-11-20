@@ -34,19 +34,32 @@ interface ZoneCreateData {
   type?: ZoneType;
 }
 
+export async function requireActiveBuilding(id: string, tenantId: string) {
+  const building = await prisma.building.findUnique({
+    where: { id, tenantId, isActive: true },
+    select: { id: true },
+  });
+  if (!building) throw new NotFoundError('Bâtiment introuvable');
+}
+
 export default {
   async findAll(tenantId: string, filters: BuildingFilters = {}) {
     const { page = 1, limit = 50, ...where } = filters;
     const skip = (page - 1) * limit;
     const [data, total] = await Promise.all([
       prisma.building.findMany({
-        where: { tenantId, ...where, isActive: true },
+        where: { ...where, tenantId, isActive: true },
         orderBy: { id: 'asc' },
         skip,
         take: limit,
-        include: { _count: { select: { zones: true, devices: true } } },
+        include: {
+          _count: { select: {
+            zones: { where: { tenantId } },
+            devices: { where: { tenantId, OR: [{ zoneId: null }, { zone: { tenantId } }] } },
+          } },
+        },
       }),
-      prisma.building.count({ where: { tenantId, ...where, isActive: true } }),
+      prisma.building.count({ where: { ...where, tenantId, isActive: true } }),
     ]);
     return { data, total, page, totalPages: Math.ceil(total / limit) };
   },
@@ -80,8 +93,9 @@ export default {
   },
 
   async findZones(buildingId: string, tenantId: string) {
+    await requireActiveBuilding(buildingId, tenantId);
     return prisma.zone.findMany({
-      where: { buildingId, tenantId },
+      where: { buildingId, tenantId, building: { tenantId, isActive: true } },
     });
   },
 
@@ -92,7 +106,13 @@ export default {
   async findById(id: string, tenantId: string) {
     const building = await prisma.building.findFirst({
       where: { id, tenantId, isActive: true },
-      include: { zones: { include: { _count: { select: { devices: true } } } }, devices: true },
+      include: {
+        zones: {
+          where: { tenantId },
+          include: { _count: { select: { devices: { where: { tenantId, buildingId: id } } } } },
+        },
+        devices: { where: { tenantId, OR: [{ zoneId: null }, { zone: { tenantId, buildingId: id } }] } },
+      },
     });
     if (!building) throw new NotFoundError('Bâtiment introuvable');
     return building;
@@ -104,7 +124,7 @@ export default {
       return await prisma.zone.create({
         data: {
           name: data.name,
-          building: { connect: { id: buildingId, tenantId } },
+          building: { connect: { id: buildingId, tenantId, isActive: true } },
           tenantId,
           floor: data.floor ?? 0,
           type: data.type ?? 'ROOM',

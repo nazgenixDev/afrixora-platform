@@ -2,6 +2,8 @@ import type { DeviceType, Prisma, Protocol } from '@prisma/client';
 import { prisma } from '../utils/database';
 import { publishMqtt } from './mqttWorker';
 import { NotFoundError } from '../utils/errors';
+import { assertDeviceCanBeControlled, type DeviceCommand } from '../utils/deviceCommands';
+import logger from '../utils/logger';
 
 export interface DeviceFilters {
   buildingId?: string;
@@ -155,20 +157,26 @@ export default {
     await prisma.device.delete({ where: { ...relationsDuTenant(tenantId), id, tenantId } });
   },
 
-  async control(id: string, command: { command: string; params?: Record<string, unknown> }, tenantId: string) {
-    const device = await prisma.device.findFirst({ where: { ...relationsDuTenant(tenantId), id, tenantId } });
+  async control(id: string, command: DeviceCommand, tenantId: string) {
+    const device = await prisma.device.findFirst({
+      where: { id, tenantId, building: { tenantId, isActive: true, tenant: { isActive: true } } },
+    });
     if (!device) {
       throw new NotFoundError('Device not found');
     }
+    assertDeviceCanBeControlled(device.type);
     const topic = `afrixora/${tenantId}/${device.buildingId}/devices/${id}/commands`;
     await publishMqtt(topic, command);
-    if (command.params?.state) {
-      const state = command.params.state === 'on';
+    const state = command.command === 'set_state' ? command.params!.state! : command.command === 'turn_on' ? 'on' : 'off';
+    try {
       await prisma.deviceState.upsert({
         where: { deviceId: id, tenantId },
-        update: { state: { ...(device.config as object || {}), state: state ? 'on' : 'off' } },
-        create: { deviceId: id, tenantId, state: { state: state ? 'on' : 'off' } },
+        update: { state: { ...(device.config as object || {}), state } },
+        create: { deviceId: id, tenantId, state: { state } },
       });
+    } catch {
+      // Le broker a déjà accepté la commande. Un échec local ne doit pas inciter à la répéter.
+      logger.warn('mqtt_command_state_not_recorded', { tenantId, deviceId: id });
     }
     return { success: true };
   },

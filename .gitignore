@@ -8,6 +8,9 @@ backend/.env
 frontend/.env
 /infrastructure/docker/mosquitto_passwd
 /infrastructure/docker/mosquitto_passwd.*
+/infrastructure/docker/mqtt-auth/
+/infrastructure/docker/backup-cert.pem
+/.afrixora-demo/
 
 # Dépendances
 node_modules/
@@ -37,7 +40,7 @@ coverage/
 # Backups
 .env.backup
 .env.backup.*
-backups/*.bak
+/backups/
 *.save
 *.backup
 *.bak

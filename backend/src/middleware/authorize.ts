@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
 import { Role } from '@prisma/client';
-import logger from '../utils/logger';
 
 /**
  * Authorization middleware factory
@@ -10,25 +9,13 @@ import logger from '../utils/logger';
  */
 export const authorize = (allowedRoles: Role[]) => {
   return (req: Request, res: Response, next: NextFunction) => {
-    try {
-      // Check if user exists on request (set by authenticate middleware)
-      if (!req.user) {
-        return res.status(401).json({ error: 'Authentication required' });
-      }
-
-      // Check if user role is in allowed roles
-      const userRole = req.user.role as Role;
-      if (!allowedRoles.includes(userRole)) {
-        logger.warn(`Authorization failed: User ${req.user.userId} with role ${userRole} attempted to access a restricted resource`);
-        return res.status(403).json({ error: 'Insufficient permissions' });
-      }
-
-      // User is authorized
-      return next();
-    } catch (error) {
-      logger.error('Authorization error', { error });
-      return res.status(500).json({ error: 'Internal server error' });
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
     }
+    if (!allowedRoles.includes(req.user.role as Role)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    return next();
   };
 };
 

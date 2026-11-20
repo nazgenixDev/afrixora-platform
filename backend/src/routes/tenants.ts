@@ -3,29 +3,30 @@ import { prisma } from '../utils/database';
 import { SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
 import { authenticate } from '../middleware/authenticate';
 import { authorize } from '../middleware/authorize';
-import { getPlanLimits } from '../utils/plans';
+import { getSubscriptionLimits } from '../utils/plans';
 import { createTenant, deleteTenantPermanently } from '../services/tenantService';
 import logger from '../utils/logger';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
-import { Resend } from 'resend';
 import { NotFoundError } from '../utils/errors';
+import { sendUpgradeRequestEmail } from '../services/emailService';
+import { newPasswordSchema } from '../utils/passwordPolicy';
 
 const createTenantSchema = z.object({
   body: z.object({
-    name: z.string().trim().min(1),
+    name: z.string().trim().min(1).max(120),
     slug: z.string().regex(/^[a-z0-9-]{3,40}$/),
     plan: z.nativeEnum(SubscriptionPlan),
     adminEmail: z.string().email(),
     adminName: z.string().trim().min(1),
-    adminPassword: z.string().min(8),
+    adminPassword: newPasswordSchema,
   }).strict(),
 });
 
 const planSchema = z.object({
   body: z.object({
     plan: z.enum(['BASIC', 'PRO', 'BUSINESS', 'ENTERPRISE'], {
-      errorMap: () => ({ message: 'Plan must be one of: BASIC, PRO, BUSINESS, ENTERPRISE' }),
+      error: 'Plan invalide.',
     }),
   }),
 });
@@ -33,7 +34,7 @@ const planSchema = z.object({
 const upgradeRequestSchema = z.object({
   body: z.object({
     requestedPlan: z.enum(['BASIC', 'PRO', 'BUSINESS', 'ENTERPRISE'], {
-      errorMap: () => ({ message: 'Plan must be one of: BASIC, PRO, BUSINESS, ENTERPRISE' }),
+      error: 'Plan invalide.',
     }),
   }),
 });
@@ -45,8 +46,19 @@ const tenantActivitySchema = z.object({
 const router = Router();
 
 async function setTenantActivity(id: string, isActive: boolean) {
-  const { count } = await prisma.tenant.updateMany({ where: { id }, data: { isActive } });
-  if (count === 0) throw new NotFoundError('Tenant introuvable');
+  await prisma.$transaction(async (tx) => {
+    const changed = await tx.tenant.updateMany({ where: { id, isActive: !isActive }, data: { isActive } });
+    if (changed.count === 0 && !await tx.tenant.findUnique({ where: { id }, select: { id: true } })) {
+      throw new NotFoundError('Tenant introuvable');
+    }
+    if (!isActive && changed.count > 0) {
+      await tx.user.updateMany({
+        where: { tenantId: id, role: { not: 'SUPER_ADMIN' } },
+        data: { jwtVersion: { increment: 1 } },
+      });
+      await tx.apiKey.updateMany({ where: { tenantId: id, isActive: true }, data: { isActive: false } });
+    }
+  });
 }
 
 // GET /tenants - list all tenants (super admin only)
@@ -90,7 +102,7 @@ router.get('/current/subscription', authenticate, async (req, res, next) => {
       take: 10,
     });
 
-    const limits = getPlanLimits(tenant.plan);
+    const limits = getSubscriptionLimits(tenant);
 
     res.json({
       plan: tenant.plan,
@@ -109,30 +121,20 @@ router.get('/current/subscription', authenticate, async (req, res, next) => {
 router.post('/current/upgrade-request', authenticate, authorize(['TENANT_ADMIN']), validate(upgradeRequestSchema), async (req, res, next) => {
   try {
     const tenantId = req.user!.tenantId;
-    const { requestedPlan } = req.body as { requestedPlan: 'BASIC' | 'PRO' | 'BUSINESS' | 'ENTERPRISE' };
+    const { requestedPlan }: z.infer<typeof upgradeRequestSchema>['body'] = res.locals.validatedBody;
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
     if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
 
-    const superAdmin = await prisma.user.findFirst({ where: { role: 'SUPER_ADMIN', isActive: true } });
+    const superAdmin = await prisma.user.findFirst({
+      where: { role: 'SUPER_ADMIN', isActive: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { email: true },
+    });
     if (!superAdmin) return res.status(500).json({ error: 'No super admin found' });
 
-    logger.info(`Upgrade request: ${tenant.name} (${tenantId}) to ${requestedPlan}`);
+    await sendUpgradeRequestEmail({ tenantId, tenantName: tenant.name, requestedPlan, adminEmail: superAdmin.email });
 
-    if (process.env.RESEND_API_KEY) {
-      const resend = new Resend(process.env.RESEND_API_KEY);
-      await resend.emails.send({
-        from: 'AFRIXORA <onboarding@resend.dev>',
-        to: superAdmin.email,
-        subject: `Demande de changement de plan - ${tenant.name}`,
-        html: `<h2>Demande de changement de plan</h2>
-               <p>Le client <strong>${tenant.name}</strong> souhaite passer au plan <strong>${requestedPlan}</strong>.</p>
-               <p>Connectez-vous à la plateforme pour approuver ce changement.</p>`,
-      });
-      logger.info(`Email sent to ${superAdmin.email}`);
-    } else {
-      logger.warn('RESEND_API_KEY not set, email not sent');
-    }
-
+    logger.info('subscription_upgrade_requested', { tenantId, requestedPlan });
     res.json({ message: 'Demande envoyée au super administrateur' });
   } catch (error) {
     next(error);
@@ -154,11 +156,11 @@ router.get('/:id', authenticate, authorize(['SUPER_ADMIN']), async (req, res, ne
 router.get('/:id/subscription', authenticate, authorize(['SUPER_ADMIN', 'TENANT_ADMIN']), async (req, res, next) => {
   try {
     const { id } = req.params;
-    const tenant = await prisma.tenant.findUnique({ where: { id } });
-    if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
-
     const user = req.user!;
-    if (user.role === 'TENANT_ADMIN' && user.tenantId !== id) return res.status(403).json({ error: 'Forbidden' });
+    const tenant = user.role === 'SUPER_ADMIN' || user.tenantId === id
+      ? await prisma.tenant.findUnique({ where: { id } })
+      : null;
+    if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
 
     const [deviceCount, automationCount] = await Promise.all([
       prisma.device.count({ where: { tenantId: id } }),
@@ -171,7 +173,7 @@ router.get('/:id/subscription', authenticate, authorize(['SUPER_ADMIN', 'TENANT_
       take: 10,
     });
 
-    const limits = getPlanLimits(tenant.plan);
+    const limits = getSubscriptionLimits(tenant);
 
     res.json({
       plan: tenant.plan,
@@ -190,12 +192,15 @@ router.get('/:id/subscription', authenticate, authorize(['SUPER_ADMIN', 'TENANT_
 router.patch('/:id/plan', authenticate, authorize(['SUPER_ADMIN']), validate(planSchema), async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { plan } = req.body as { plan: 'BASIC' | 'PRO' | 'BUSINESS' | 'ENTERPRISE' };
+    const { plan }: z.infer<typeof planSchema>['body'] = res.locals.validatedBody;
     const tenant = await prisma.tenant.findUnique({ where: { id } });
     if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
 
     const updatedTenant = await prisma.$transaction(async (tx) => {
-      const updated = await tx.tenant.update({ where: { id }, data: { plan } });
+      const updated = await tx.tenant.update({
+        where: { id },
+        data: { plan, subscriptionStatus: SubscriptionStatus.ACTIVE, subscriptionEndsAt: null },
+      });
       await tx.subscriptionHistory.create({
         data: {
           tenantId: id,

@@ -2,7 +2,9 @@ import { AlertType, Severity } from '@prisma/client';
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
+import { authorizeOperator } from '../middleware/authorize';
 import { alertService } from '../services/alertService';
+import { limitSchema, pageSchema } from '../utils/querySchemas';
 
 const router = Router();
 
@@ -10,14 +12,14 @@ const alertQuerySchema = z.object({
   query: z.object({
     isRead: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
     severity: z.nativeEnum(Severity).optional(),
-    buildingId: z.string().uuid().optional(),
+    buildingId: z.guid().optional(),
     type: z.nativeEnum(AlertType).optional(),
-    page: z.coerce.number().int().min(1).max(Math.floor(2_147_483_647 / 100)).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(50),
+    page: pageSchema,
+    limit: limitSchema.default(50),
   }),
 });
 
-const alertParamsSchema = z.object({ params: z.object({ id: z.string().uuid() }) });
+const alertParamsSchema = z.object({ params: z.object({ id: z.guid() }) });
 
 // Express 4 exige de transmettre les erreurs asynchrones au middleware global.
 const withErrorHandler = (handler: (req: Request, res: Response) => Promise<void>) =>
@@ -34,7 +36,7 @@ router.get('/', validate(alertQuerySchema), withErrorHandler(async (req, res) =>
   res.json(await alertService.findAll(req.user!.tenantId, filters, { page, limit }));
 }));
 
-router.patch('/:id/read', validate(alertParamsSchema), withErrorHandler(async (req, res) => {
+router.patch('/:id/read', authorizeOperator, validate(alertParamsSchema), withErrorHandler(async (req, res) => {
   res.json(await alertService.markAsRead(req.params.id, req.user!.tenantId));
 }));
 

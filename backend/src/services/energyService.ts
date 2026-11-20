@@ -1,7 +1,10 @@
 import { query } from '../utils/database';
-import { avgPowerSql, energyPeriodHours, energySamplesSql, energyTimeZone, latestPowerW, totalEnergySql } from './energyQueries';
+import {
+  avgPowerSql, energyPeriodHours, energySamplesSql, energyTimeZone, latestBuildingPowerW, totalEnergySql,
+  type EnergyPeriod,
+} from './energyQueries';
 
-function periodSamplesSql(period: string) {
+function periodSamplesSql(period: EnergyPeriod) {
   return energySamplesSql("NOW() - $3::integer * INTERVAL '1 hour'", 'NOW()', period !== '24h');
 }
 
@@ -48,7 +51,7 @@ export class EnergyService {
     };
   }
 
-  async getConsumption(tenantId: string, buildingId: string, period: string) {
+  async getConsumption(tenantId: string, buildingId: string, period: EnergyPeriod) {
     const interval = period === '24h' ? '1 hour' : '1 day';
     const result = await query(
       `WITH ${periodSamplesSql(period)}
@@ -64,7 +67,7 @@ export class EnergyService {
     return result.rows;
   }
 
-  async getByDevice(tenantId: string, buildingId: string, period: string) {
+  async getByDevice(tenantId: string, buildingId: string, period: EnergyPeriod) {
     const result = await query(
       `WITH ${periodSamplesSql(period)}
        SELECT d.id AS "deviceId", d.name, ${totalEnergySql} AS total_kwh
@@ -78,13 +81,13 @@ export class EnergyService {
     return result.rows;
   }
 
-  async getByZone(tenantId: string, buildingId: string, period: string) {
+  async getByZone(tenantId: string, buildingId: string, period: EnergyPeriod) {
     const result = await query(
       `WITH ${periodSamplesSql(period)}
        SELECT z.id AS "zoneId", z.name, ${totalEnergySql} AS total_kwh
        FROM samples s
        JOIN devices d ON d.device_id = s.device_id
-       LEFT JOIN "Zone" z ON d."zoneId" = z.id
+       LEFT JOIN "Zone" z ON d."zoneId" = z.id AND z."tenantId" = $1 AND z."buildingId" = $2
        WHERE s.metric = 'energy_kwh'
        GROUP BY z.id, z.name
        ORDER BY total_kwh DESC`,
@@ -93,7 +96,7 @@ export class EnergyService {
     return result.rows;
   }
 
-  async getSummary(tenantId: string, buildingId: string, period: string) {
+  async getSummary(tenantId: string, buildingId: string, period: EnergyPeriod) {
     const costPerKwh = parseFloat(process.env.ENERGY_COST_PER_KWH || '0.12');
     const [result, currentPowerW] = await Promise.all([
       query(
@@ -105,7 +108,7 @@ export class EnergyService {
          FROM samples`,
         [tenantId, buildingId, energyPeriodHours(period)]
       ),
-      latestPowerW(tenantId, buildingId),
+      latestBuildingPowerW(tenantId, buildingId),
     ]);
 
     const row = result.rows[0];

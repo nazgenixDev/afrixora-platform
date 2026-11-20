@@ -14,7 +14,7 @@ const redisClient = new Redis(REDIS_URL, {
 });
 
 redisClient.on('connect', () => logger.info('Redis connected'));
-redisClient.on('error', (err) => logger.error('Redis connection error', { error: err.message }));
+redisClient.on('error', (err) => logger.error('redis_connection_error', { errorType: err.name }));
 redisClient.on('close', () => logger.warn('Redis connection closed'));
 
 export const getRedisClient = (): Redis => redisClient;

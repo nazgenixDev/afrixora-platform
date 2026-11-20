@@ -41,7 +41,7 @@ interface Device {
   config?: Record<string, any>;
 }
 
-const BuildingDetailPage = (): JSX.Element => {
+const BuildingDetailPage = () => {
   const params = useParams();
   const router = useRouter();
   const buildingId = params.id as string;

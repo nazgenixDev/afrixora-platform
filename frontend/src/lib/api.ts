@@ -1,5 +1,5 @@
 import axios, { type InternalAxiosRequestConfig } from "axios";
-import { redirectToLogin } from "./auth";
+import { redirectToLogin, removeLegacyAccessToken } from "./auth";
 import { API_URL } from "./config";
 import useStore from "@/store";
 
@@ -13,31 +13,35 @@ const api = axios.create({
 
 const loginPath = "/api/v1/auth/login";
 const refreshPath = "/api/v1/auth/refresh";
-const useLocalToken = process.env.NODE_ENV === "development";
+const logoutPath = "/api/v1/auth/logout";
 let pendingRefresh: Promise<void> | undefined;
 
 interface RetryConfig extends InternalAxiosRequestConfig {
   retriedAfterRefresh?: boolean;
 }
 
-async function refreshSession(): Promise<void> {
-  try {
-    const { data } = await api.post<{ accessToken?: string }>(refreshPath);
-    if (useLocalToken && data.accessToken) {
-      localStorage.setItem("afrixora_token", data.accessToken);
-    }
-  } finally {
-    pendingRefresh = undefined;
-  }
+// La file d’attente couvre les requêtes API, les sockets et les onglets de la même origine.
+async function withSessionLock(action: () => Promise<unknown>) {
+  if (navigator.locks) await navigator.locks.request("afrixora-session", action);
+  else await action();
 }
+
+export function refreshSession(): Promise<void> {
+  pendingRefresh ??= withSessionLock(() => api.post(refreshPath)).finally(() => {
+    pendingRefresh = undefined;
+  });
+  return pendingRefresh;
+}
+
+export async function logoutSession(): Promise<void> {
+  await pendingRefresh?.catch(() => undefined);
+  await withSessionLock(() => api.post(logoutPath));
+}
+
+if (typeof window !== "undefined") removeLegacyAccessToken();
 
 api.interceptors.request.use((config): InternalAxiosRequestConfig => {
   if (typeof window !== "undefined") {
-    if (useLocalToken) {
-      const token = localStorage.getItem("afrixora_token");
-      if (token) config.headers.Authorization = `Bearer ${token}`;
-    }
-
     const path = config.url?.split(/[?#]/, 1)[0].replace(/\/+$/, "") ?? "";
     const isGlobalTenantRoute = path === "/api/v1/tenants"
       || (path.startsWith("/api/v1/tenants/") && !path.startsWith("/api/v1/tenants/current/"));
@@ -67,7 +71,7 @@ api.interceptors.response.use(undefined, async (error: unknown) => {
 
   const config: RetryConfig | undefined = error.config;
   const path = config?.url?.split(/[?#]/, 1)[0].replace(/\/+$/, "");
-  if (!config || path?.endsWith(loginPath) || path?.endsWith(refreshPath)) {
+  if (!config || path?.endsWith(loginPath) || path?.endsWith(refreshPath) || path?.endsWith(logoutPath)) {
     throw error;
   }
 
@@ -78,8 +82,7 @@ api.interceptors.response.use(undefined, async (error: unknown) => {
 
   config.retriedAfterRefresh = true;
   try {
-    pendingRefresh ??= refreshSession();
-    await pendingRefresh;
+    await refreshSession();
   } catch {
     redirectToLogin();
     throw error;

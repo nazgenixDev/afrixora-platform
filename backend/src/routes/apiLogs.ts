@@ -5,18 +5,19 @@ import authenticate from "../middleware/authenticate";
 import { authorize } from "../middleware/authorize";
 import { requireApi } from "../middleware/features";
 import prisma from "../utils/database";
+import { limitSchema, pageSchema } from "../utils/querySchemas";
 
 const router = Router();
 
 const logQuerySchema = z.object({
-  method: z.string().optional(),
+  method: z.string().max(16).optional(),
   statusCode: z.union([
     z.string().regex(/^(?:[245]xx|[1-5][0-9]{2})$/),
     z.literal("__all__").transform(() => undefined),
   ]).optional(),
-  endpoint: z.string().optional(),
-  page: z.coerce.number().int().min(1).max(Math.floor(2_147_483_647 / 100)).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  endpoint: z.string().max(140).optional(),
+  page: pageSchema,
+  limit: limitSchema.default(50),
 });
 
 router.get(

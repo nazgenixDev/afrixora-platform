@@ -1,5 +1,7 @@
 "use client";
 
+import { isValidNewPassword, passwordRequirements } from "@/lib/passwordPolicy";
+
 import { useState, useEffect } from "react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
@@ -17,7 +19,6 @@ import { Badge } from "@/components/ui/badge";
 import useStore from "@/store";
 import api from "@/lib/api";
 
-const NOTIFICATIONS_KEY = "afrixora_notifications";
 
 // ─── Sous-composant Profil ───────────────────────────────────
 const ProfileTab = () => {
@@ -147,8 +148,8 @@ const SecurityTab = () => {
       toast.error("Veuillez saisir votre mot de passe actuel.");
       return;
     }
-    if (newPassword.length < 6) {
-      toast.error("Le nouveau mot de passe doit contenir au moins 6 caractères.");
+    if (!isValidNewPassword(newPassword)) {
+      toast.error(passwordRequirements);
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -228,9 +229,9 @@ const SecurityTab = () => {
         {/* Indicateur de force du mot de passe */}
         {newPassword && (
           <div className="flex items-center gap-2 text-xs">
-            <ShieldCheck className={`h-3.5 w-3.5 ${newPassword.length >= 6 ? "text-emerald-500" : "text-muted-foreground"}`} />
-            <span className={newPassword.length >= 6 ? "text-emerald-500" : "text-muted-foreground"}>
-              {newPassword.length >= 6 ? "Mot de passe valide" : `Minimum 6 caractères (${newPassword.length}/6)`}
+            <ShieldCheck className={`h-3.5 w-3.5 ${isValidNewPassword(newPassword) ? "text-emerald-500" : "text-muted-foreground"}`} />
+            <span className={isValidNewPassword(newPassword) ? "text-emerald-500" : "text-muted-foreground"}>
+              {isValidNewPassword(newPassword) ? "Mot de passe valide" : passwordRequirements}
             </span>
           </div>
         )}
@@ -268,65 +269,17 @@ const SecurityTab = () => {
 };
 
 // ─── Sous-composant Notifications ────────────────────────────
-const NotificationsTab = () => {
-  const [emailAlerts, setEmailAlerts] = useState(false);
-
-  useEffect(() => {
-    const stored = localStorage.getItem(NOTIFICATIONS_KEY);
-    if (stored !== null) {
-      setEmailAlerts(stored === "true");
-    }
-  }, []);
-
-  const toggleEmailAlerts = (checked: boolean) => {
-    setEmailAlerts(checked);
-    localStorage.setItem(NOTIFICATIONS_KEY, String(checked));
-    toast.success(checked
-      ? "Notifications email activées"
-      : "Notifications email désactivées"
-    );
-  };
-
-  return (
-    <Card className="card-hover">
-      <CardHeader>
-        <div className="flex items-center gap-2">
-          <Bell className="h-5 w-5 text-brand-500" />
-          <div>
-            <CardTitle>Préférences de notifications</CardTitle>
-            <CardDescription>Gérez comment vous recevez les alertes et notifications</CardDescription>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-5">
-        <div className="flex items-center justify-between rounded-lg border p-4 transition-all duration-200 hover:bg-accent/30">
-          <div className="space-y-0.5">
-            <Label htmlFor="email-alerts" className="text-sm font-medium cursor-pointer">
-              Alertes par email
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              Recevez une notification par email en cas d&apos;alerte critique ou d&apos;événement important
-            </p>
-          </div>
-          <Switch
-            id="email-alerts"
-            checked={emailAlerts}
-            onCheckedChange={toggleEmailAlerts}
-          />
-        </div>
-
-        <Separator />
-
-        <div className="rounded-lg bg-muted/50 p-3">
-          <p className="text-xs text-muted-foreground">
-            <strong>Info :</strong> Ces préférences sont stockées localement sur votre navigateur.
-            Les notifications email seront effectives lors de votre prochaine connexion.
-          </p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-};
+const NotificationsTab = () => (
+  <Card className="card-hover">
+    <CardHeader>
+      <CardTitle className="flex items-center gap-2">
+        <Bell className="h-5 w-5 text-brand-500" />
+        Notifications
+      </CardTitle>
+      <CardDescription>La cloche du tableau de bord affiche les alertes de votre périmètre.</CardDescription>
+    </CardHeader>
+  </Card>
+);
 
 // ─── Sous-composant Apparence ────────────────────────────────
 const AppearanceTab = () => {
@@ -437,7 +390,7 @@ const AppearanceTab = () => {
 };
 
 // ─── Page principale ─────────────────────────────────────────
-const SettingsPage = (): JSX.Element => {
+const SettingsPage = () => {
   return (
     <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
       {/* En-tête */}

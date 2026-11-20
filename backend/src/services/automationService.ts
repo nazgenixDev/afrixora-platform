@@ -2,6 +2,7 @@ import { Prisma, type Automation } from '@prisma/client';
 import type { CreateAutomationInput, UpdateAutomationInput } from '../utils/automationSchemas';
 import { prisma } from '../utils/database';
 import { NotFoundError } from '../utils/errors';
+import { assertDeviceCanBeControlled } from '../utils/deviceCommands';
 
 async function verifyDevices(
   tenantId: string,
@@ -15,19 +16,22 @@ async function verifyDevices(
 
   const devices = await prisma.device.findMany({
     where: { id: { in: [...deviceIds] }, tenantId, buildingId },
-    select: { id: true },
+    select: { id: true, type: true },
   });
   if (devices.length !== deviceIds.size) throw new NotFoundError('Appareil introuvable dans ce bâtiment');
+  if (action?.type === 'DEVICE_COMMAND') {
+    assertDeviceCanBeControlled(devices.find(({ id }) => id === action.deviceId)!.type);
+  }
 }
 
 export default {
   async findAll(tenantId: string): Promise<Automation[]> {
-    return prisma.automation.findMany({ where: { tenantId } });
+    return prisma.automation.findMany({ where: { tenantId, building: { tenantId } } });
   },
   async create(data: CreateAutomationInput, tenantId: string): Promise<Automation> {
     const { buildingId, name, trigger, conditions, action } = data;
     const building = await prisma.building.findFirst({
-      where: { id: buildingId, tenantId },
+      where: { id: buildingId, tenantId, isActive: true },
       select: { id: true },
     });
     if (!building) throw new NotFoundError('Bâtiment introuvable');
@@ -38,7 +42,7 @@ export default {
     });
   },
   async update(id: string, data: UpdateAutomationInput, tenantId: string): Promise<Automation> {
-    const where = { id, tenantId };
+    const where = { id, tenantId, building: { tenantId, isActive: true } };
     const automation = await prisma.automation.findFirst({ where, select: { buildingId: true } });
     if (!automation) throw new NotFoundError('Automatisation introuvable');
 
@@ -54,7 +58,7 @@ export default {
     }
   },
   async remove(id: string, tenantId: string): Promise<void> {
-    const where = { id, tenantId };
+    const where = { id, tenantId, building: { tenantId } };
     const automation = await prisma.automation.findFirst({ where, select: { id: true } });
     if (!automation) throw new NotFoundError('Automatisation introuvable');
 

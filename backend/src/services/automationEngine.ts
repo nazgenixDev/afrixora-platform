@@ -1,6 +1,7 @@
 import { Server } from 'socket.io';
 import { prisma } from '../utils/database';
-import type { CreateAutomationInput } from '../utils/automationSchemas';
+import { automationActionSchema } from '../utils/automationSchemas';
+import { assertDeviceCanBeControlled } from '../utils/deviceCommands';
 import { publishMqtt } from './mqttWorker';
 import logger from '../utils/logger';
 
@@ -25,6 +26,7 @@ export const evaluate = async (
       where: {
         tenantId,
         buildingId,
+        building: { tenantId, isActive: true, tenant: { isActive: true } },
         isActive: true,
         trigger: { path: ['deviceId'], equals: deviceId }
       }
@@ -80,7 +82,13 @@ export const evaluate = async (
 
         // If condition is met and rule hasn't fired recently (or never fired)
         if (conditionMet && (!rule.lastFiredAt || new Date().getTime() - rule.lastFiredAt.getTime() > 5 * 60 * 1000)) {
-          logger.info(`Automation rule triggered: ${rule.name}`, {
+          const parsedAction = automationActionSchema.safeParse(rule.action);
+          if (!parsedAction.success) {
+            logger.warn('automation_action_invalid', { ruleId: rule.id, tenantId, buildingId });
+            continue;
+          }
+          const action = parsedAction.data;
+          logger.info('automation_triggered', {
             ruleId: rule.id,
             tenantId,
             buildingId,
@@ -90,19 +98,21 @@ export const evaluate = async (
           });
 
           // Execute the action based on its type
-          const action = rule.action as CreateAutomationInput['action'];
-          
           if (action.type === 'DEVICE_COMMAND') {
-            // Send command to device via MQTT
+            const target = await prisma.device.findFirst({
+              where: {
+                id: action.deviceId, tenantId, buildingId,
+                building: { isActive: true, tenant: { isActive: true } },
+              },
+              select: { type: true },
+            });
+            if (!target) continue;
+            assertDeviceCanBeControlled(target.type);
             await publishMqtt(
               `afrixora/${tenantId}/${buildingId}/devices/${action.deviceId}/commands`,
               { command: action.command, params: action.params }
             );
             
-            logger.debug(`Published MQTT command for device ${action.deviceId}`, {
-              command: action.command,
-              params: action.params
-            });
           } 
           else if (action.type === 'SEND_ALERT') {
             // Create alert in database
@@ -136,7 +146,7 @@ export const evaluate = async (
       } catch (ruleError) {
         // Log error but continue processing other rules
         logger.error(`Error evaluating rule ${rule.id}`, {
-          error: (ruleError as Error).message,
+          errorType: (ruleError as Error).name,
           ruleId: rule.id,
           tenantId,
           buildingId
@@ -145,7 +155,7 @@ export const evaluate = async (
     }
   } catch (error) {
     logger.error('Error in automation engine', {
-      error: (error as Error).message,
+      errorType: (error as Error).name,
       tenantId,
       buildingId,
       deviceId

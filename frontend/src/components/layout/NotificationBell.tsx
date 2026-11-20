@@ -16,11 +16,12 @@ import logger from "@/lib/logger";
 import useStore from "@/store";
 import type { Alert, PaginatedResponse } from "@/types";
 
-const NotificationBell = (): JSX.Element => {
+const NotificationBell = () => {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const storeAlerts = useStore((state) => state.alerts);
   const addAlert = useStore((state) => state.addAlert);
+  const canAcknowledge = useStore(({ user }) => !!user && user.role !== "VIEWER");
 
   useEffect(() => {
     let pending: AbortController | undefined;
@@ -102,7 +103,7 @@ const NotificationBell = (): JSX.Element => {
                 >
                   {alert.severity === "CRITICAL" ? "CRIT" : alert.severity === "WARNING" ? "WARN" : "INFO"}
                 </Badge>
-                <button
+                {canAcknowledge && <button
                   onClick={(e) => {
                     e.stopPropagation();
                     markAsRead(alert.id);
@@ -110,7 +111,7 @@ const NotificationBell = (): JSX.Element => {
                   className="text-xs text-muted-foreground hover:text-foreground"
                 >
                   Marquer lue
-                </button>
+                </button>}
               </div>
               <p className="text-sm">{alert.message}</p>
               <p className="text-xs text-muted-foreground">

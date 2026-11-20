@@ -70,7 +70,7 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: |
-          token_patterns='(A[K]IA|A[S]IA)[A-Z0-9]{16}|g[h][pousr]_[[:alnum:]_]{30,}|github[_]pat_[[:alnum:]_]{30,}|x[o]x[baprs]-[[:alnum:]-]{10,}|(afrx|nxa)[_]live_[[:xdigit:]]{32,}'
+          token_patterns='(A[K]IA|A[S]IA)[A-Z0-9]{16}|g[h][pousr]_[[:alnum:]_]{30,}|github[_]pat_[[:alnum:]_]{30,}|x[o]x[baprs]-[[:alnum:]-]{10,}|(afrx|nxa)[_]live_[[:xdigit:]]{32,}|r[e]_[[:alnum:]_]{25,}'
           key_patterns='-----BEGIN (ENCRYPTED |RSA |EC |OPENSSH |DSA |PGP )?PRIVATE [K]EY( BLOCK)?-----'
           status=0
           git grep -I -l -E -e "$token_patterns|$key_patterns" -- . || status=$?

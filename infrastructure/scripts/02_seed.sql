@@ -1,28 +1,12 @@
--- AFRIXORA Seed Data (noms de tables Prisma)
+-- Données fictives à charger manuellement sur une base de démonstration isolée.
+-- Initialiser le compte administrateur avec prisma db seed.
 BEGIN;
 
 -- 1. Tenant
 INSERT INTO "Tenant" (id, name, slug, plan, "isActive", "createdAt")
-VALUES ('c0a80121-0000-4000-8000-000000000001', 'Client Démo', 'demo', 'CORE', true, NOW());
+VALUES ('c0a80121-0000-4000-8000-000000000001', 'Client Démo', 'demo', 'BASIC', true, NOW());
 
--- 2. Admin User
--- ATTENTION : le hash ci-dessous est un EXEMPLE non valide, présent uniquement
--- pour que le script soit exécutable. Ne jamais l'utiliser en production.
--- Le compte admin réel doit être créé par `prisma db seed` avec
--- SEED_ADMIN_PASSWORD (voir .env.example). Le compte de démo ne doit jamais
--- exister en production.
-INSERT INTO "User" (id, "tenantId", email, "passwordHash", name, role, "jwtVersion", "isActive", "createdAt")
-VALUES ('c0a80121-0000-4000-8000-000000000002',
-        'c0a80121-0000-4000-8000-000000000001',
-        'admin@afrixora.cd',
-        '$2b$10$8K1p/a0dL2pX0j1c1qJQvO5x0ZyBOq6L6H5X3Y5W7l3n5O6N3Z5Gm',
-        'Admin AFRIXORA',
-        'SUPER_ADMIN',
-        0,
-        true,
-        NOW());
-
--- 3. Building
+-- 2. Bâtiment
 INSERT INTO "Building" (id, "tenantId", name, address, city, "unitsCount", "isActive", "createdAt")
 VALUES ('c0a80121-0000-4000-8000-000000000003',
         'c0a80121-0000-4000-8000-000000000001',
@@ -33,7 +17,7 @@ VALUES ('c0a80121-0000-4000-8000-000000000003',
         true,
         NOW());
 
--- 4. Zones
+-- 3. Zones
 -- Bureau 101
 INSERT INTO "Zone" (id, "tenantId", "buildingId", name, floor, type)
 VALUES ('c0a80121-0000-4000-8000-000000000004',
@@ -69,7 +53,7 @@ VALUES ('c0a80121-0000-4000-8000-000000000008',
         'c0a80121-0000-4000-8000-000000000003',
         'Parking', -1, 'PARKING');
 
--- 5. Devices
+-- 4. Appareils
 -- Lumière Bureau 101
 INSERT INTO "Device" (id, "tenantId", "buildingId", "zoneId", name, type, protocol, "macAddress", "isOnline", "lastSeen")
 VALUES ('c0a80121-0000-4000-8000-000000000009',
@@ -110,7 +94,7 @@ VALUES ('c0a80121-0000-4000-8000-000000000013',
         'c0a80121-0000-4000-8000-000000000006',
         'Thermostat Salle Réunion', 'THERMOSTAT', 'MQTT', 'AA:BB:CC:DD:EE:05', true, NOW());
 
--- 6. Device States
+-- 5. États des appareils
 INSERT INTO "DeviceState" (id, "deviceId", "tenantId", state, "updatedAt")
 VALUES ('c0a80121-0000-4000-8000-000000000014',
         'c0a80121-0000-4000-8000-000000000009',

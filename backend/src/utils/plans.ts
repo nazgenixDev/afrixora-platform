@@ -14,5 +14,15 @@ export const PLAN_LIMITS: Record<string, PlanLimits> = {
 };
 
 export function getPlanLimits(plan: string): PlanLimits {
-  return PLAN_LIMITS[plan] || PLAN_LIMITS.BASIC;
+  return Object.prototype.hasOwnProperty.call(PLAN_LIMITS, plan) ? PLAN_LIMITS[plan] : PLAN_LIMITS.BASIC;
+}
+
+export function getSubscriptionLimits(subscription: {
+  plan: string;
+  subscriptionStatus: string;
+  subscriptionEndsAt: Date | null;
+}): PlanLimits {
+  const { plan, subscriptionStatus, subscriptionEndsAt } = subscription;
+  const active = subscriptionStatus === 'ACTIVE' || subscriptionStatus === 'TRIAL';
+  return getPlanLimits(active && (!subscriptionEndsAt || subscriptionEndsAt > new Date()) ? plan : 'BASIC');
 }

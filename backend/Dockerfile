@@ -1,5 +1,5 @@
 # Construction de l’API et des outils Prisma
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -23,7 +23,7 @@ RUN npm run build \
        --skipLibCheck --outDir /app/seed prisma/seed.ts
 
 # Stage 2: Runner
-FROM node:20-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 
@@ -58,9 +58,9 @@ USER afrixora
 # Expose the port the app runs on
 EXPOSE 4000
 
-# Health check
+# Disponibilité de l’API et de ses dépendances
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:4000/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:4000/ready || exit 1
 
 # Start the application
 CMD ["node", "dist/server.js"]

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Alert } from '@/types';
+import { removeLegacyAccessToken } from '@/lib/auth';
 
 export type { Alert, AlertType, Severity } from '@/types';
 
@@ -71,6 +72,7 @@ const createAuthSlice = (set: StoreSetter) => ({
     set({ user, token });
   },
   clearAuth: () => {
+    removeLegacyAccessToken();
     localStorage.removeItem('afrixora_impersonated_tenant_id');
     set({ user: null, token: null, impersonatedTenantId: null });
   },

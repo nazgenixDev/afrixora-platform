@@ -1,11 +1,11 @@
-import express from 'express';
+import express, { type Response } from 'express';
 import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
-import authService from '../services/authService';
+import authService, { accessLifetime } from '../services/authService';
 import { validate } from '../middleware/validate';
-import authenticate from '../middleware/authenticate';
+import authenticate, { requestAccessToken } from '../middleware/authenticate';
 import { prisma } from '../utils/database';
-import logger from '../utils/logger';
+import { configuredBrowserOrigins } from '../utils/browserOrigins';
 
 const router = express.Router();
 
@@ -26,112 +26,101 @@ const refreshLimiter = rateLimit({
   message: { error: 'Trop de tentatives. Réessayez dans 15 minutes.' },
 });
 
-// Login schema validation
 const loginSchema = z.object({
   body: z.object({
     email: z.string().email('Invalid email format'),
+    // La limite JSON borne la taille tout en acceptant les anciens mots de passe.
     password: z.string().min(6, 'Password must be at least 6 characters'),
   }),
 });
 
-// Cookie options
-const ACCESS_COOKIE_OPTIONS = {
+const accessCookie = {
   httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
+  secure: process.env.NODE_ENV === 'production',
   sameSite: 'lax' as const,
-  maxAge: 15 * 60 * 1000,
   path: '/',
 };
 
-const REFRESH_COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: 'lax' as const,
-  maxAge: 7 * 24 * 60 * 60 * 1000,
-  path: '/',
+const refreshCookie = {
+  ...accessCookie,
+  path: '/api/v1/auth',
 };
 
-/**
- * @route POST /auth/login
- * @desc Authenticate user and get tokens (set as httpOnly cookies)
- * @access Public (rate-limited)
- */
+function setSessionCookies(
+  res: Response,
+  session: { accessToken: string; refreshToken: string; expiresAt: number },
+) {
+  const maxAge = Math.max(0, Math.min(accessLifetime * 1000, session.expiresAt * 1000 - Date.now()));
+  res.cookie('access_token', session.accessToken, { ...accessCookie, maxAge });
+  res.cookie('refresh_token', session.refreshToken, {
+    ...refreshCookie,
+    expires: new Date(session.expiresAt * 1000),
+  });
+}
+
+router.use((_req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 router.post('/login', loginLimiter, validate(loginSchema), async (req, res, next) => {
+  if (!configuredBrowserOrigins().includes(req.get('Origin') ?? '')) {
+    return res.status(403).json({ error: 'Origine du navigateur refusée', code: 'ORIGIN_FORBIDDEN' });
+  }
   try {
-    const { email, password } = req.body;
+    const { email, password }: z.infer<typeof loginSchema>['body'] = res.locals.validatedBody;
     const result = await authService.login(email, password);
-
-    // Set httpOnly cookies
-    res.cookie('access_token', result.accessToken, ACCESS_COOKIE_OPTIONS);
-    res.cookie('refresh_token', result.refreshToken, REFRESH_COOKIE_OPTIONS);
-
-    logger.info(`User logged in: ${email}`);
-
-    // Renvoyer l'utilisateur ET le token (cookie httpOnly + fallback localStorage pour dev cross-port)
-    return res.json({
-      user: result.user,
-      accessToken: result.accessToken,
-    });
+    res.clearCookie('refresh_token', accessCookie);
+    setSessionCookies(res, result);
+    return res.json({ user: result.user });
   } catch (error) {
     return next(error);
   }
 });
 
-/**
- * @route POST /auth/refresh
- * @desc Refresh access token using httpOnly cookie
- * @access Public (rate-limited)
- */
+// Les clients en ligne de commande obtiennent un jeton sans établir de session navigateur.
+router.post('/token', loginLimiter, validate(loginSchema), async (req, res, next) => {
+  if (req.get('Origin') !== undefined || req.get('Sec-Fetch-Site') !== undefined ||
+      req.cookies?.access_token || req.cookies?.refresh_token) {
+    return res.status(403).json({ error: 'Route réservée aux clients hors navigateur', code: 'BEARER_CLIENT_REQUIRED' });
+  }
+  try {
+    const { email, password }: z.infer<typeof loginSchema>['body'] = res.locals.validatedBody;
+    return res.json(await authService.issueAccessToken(email, password));
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.post('/refresh', refreshLimiter, async (req, res, next) => {
   try {
-    const refreshToken = req.cookies?.refresh_token;
-    const result = await authService.refreshToken(refreshToken);
-
-    // Set new access_token cookie
-    res.cookie('access_token', result.accessToken, ACCESS_COOKIE_OPTIONS);
-
-    return res.json({
-      success: true,
-      ...(process.env.NODE_ENV === 'development' ? { accessToken: result.accessToken } : {}),
-    });
+    const result = await authService.refreshToken(req.cookies?.refresh_token);
+    setSessionCookies(res, result);
+    return res.json({ success: true });
   } catch (error) {
     return next(error);
   }
 });
 
-/**
- * @route GET /auth/me
- * @desc Return current authenticated user
- * @access Private
- */
-router.get('/me', authenticate, async (req, res) => {
-  const user = await prisma.user.findUnique({
-    where: { id: req.user!.userId },
-    select: { id: true, email: true, name: true, role: true, tenantId: true },
-  });
-
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
+router.get('/me', authenticate, async (req, res, next) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.userId },
+      select: { id: true, email: true, name: true, role: true, tenantId: true },
+    });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    return res.json({ user });
+  } catch (error) {
+    return next(error);
   }
-
-  return res.json({ user });
 });
 
-/**
- * @route POST /auth/logout
- * @desc Logout user and invalidate tokens
- * @access Private
- */
-router.post('/logout', authenticate, async (req, res, next) => {
+router.post('/logout', async (req, res, next) => {
   try {
-    const userId = req.user!.userId;
-    await authService.logout(userId);
-
-    // Clear cookies
-    res.clearCookie('access_token', { path: '/' });
-    res.clearCookie('refresh_token', { path: '/' });
-
-    logger.info(`User logged out: ${userId}`);
+    await authService.logout(requestAccessToken(req), req.cookies?.refresh_token);
+    res.clearCookie('access_token', accessCookie);
+    res.clearCookie('refresh_token', refreshCookie);
+    res.clearCookie('refresh_token', accessCookie);
     return res.json({ success: true });
   } catch (error) {
     return next(error);

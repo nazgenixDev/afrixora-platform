@@ -65,8 +65,8 @@ export function startApiKeyUsageSync() {
     syncing = true;
     try {
       await syncApiKeyUsage();
-    } catch (error) {
-      logger.error("Synchronisation de l’utilisation des clés API impossible", { error });
+    } catch {
+      logger.error("api_key_usage_sync_failed");
     } finally {
       syncing = false;
     }

@@ -14,6 +14,7 @@ import api from "@/lib/api";
 import logger from "@/lib/logger";
 import useStore from "@/store";
 import ChangePasswordDialog from "@/components/users/ChangePasswordDialog";
+import { isValidNewPassword, passwordRequirements } from "@/lib/passwordPolicy";
 import { usePaginatedList } from "@/hooks/usePaginatedList";
 
 interface User {
@@ -33,7 +34,7 @@ const ROLES = [
   { value: "VIEWER", label: "Lecteur" },
 ];
 
-const UsersPage = (): JSX.Element => {
+const UsersPage = () => {
   const user = useStore(state => state.user);
   const { result, loading, error, setPage, reload, updateItems } = usePaginatedList<User>("/api/v1/users");
   const users = result?.data ?? [];
@@ -92,8 +93,8 @@ const UsersPage = (): JSX.Element => {
   };
 
   const handleResetPassword = async () => {
-    if (!resetTarget || !newPassword || newPassword.length < 6) {
-      setResetError("Le mot de passe doit faire au moins 6 caractères");
+    if (!resetTarget || !isValidNewPassword(newPassword)) {
+      setResetError(passwordRequirements);
       return;
     }
     setResetLoading(true);

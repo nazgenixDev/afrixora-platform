@@ -3,6 +3,7 @@
  * Vérifie la présence de toutes les variables critiques au démarrage.
  * Appelé au début de server.ts avant app.listen().
  */
+import { configuredBrowserOrigins, isValidBrowserOrigin } from '../utils/browserOrigins';
 
 const REQUIRED_VARS = [
   'JWT_SECRET',
@@ -37,6 +38,21 @@ export function checkEnv(): void {
     }
     console.error('');
     console.error('Assurez-vous que le fichier .env est correctement configuré.');
+    process.exit(1);
+  }
+
+  const errors: string[] = [];
+  const secrets = [process.env.JWT_SECRET!, process.env.JWT_REFRESH_SECRET!];
+  if (secrets[0] === secrets[1]) errors.push('Utiliser deux secrets JWT distincts.');
+  if (process.env.NODE_ENV === 'production' && secrets.some((secret) => Buffer.byteLength(secret) < 32)) {
+    errors.push('Chaque secret JWT de production doit faire au moins 32 octets.');
+  }
+  const origins = configuredBrowserOrigins();
+  if (origins.length === 0 || origins.some((origin) => !isValidBrowserOrigin(origin))) {
+    errors.push('CORS_ORIGINS doit contenir des origines HTTP ou HTTPS, sans chemin.');
+  }
+  if (errors.length > 0) {
+    for (const error of errors) console.error(error);
     process.exit(1);
   }
 

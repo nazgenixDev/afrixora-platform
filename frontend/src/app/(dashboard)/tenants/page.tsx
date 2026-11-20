@@ -1,5 +1,7 @@
 "use client";
 
+import { isValidNewPassword, passwordRequirements } from "@/lib/passwordPolicy";
+
 import { useEffect, useState } from "react";
 import { isAxiosError } from "axios";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,7 +23,7 @@ interface Tenant {
 const PLANS = ["BASIC", "PRO", "BUSINESS", "ENTERPRISE"];
 const INITIAL_TENANT_FORM = { name: "", slug: "", plan: "BASIC", adminEmail: "", adminName: "", adminPassword: "" };
 
-const TenantsPage = (): JSX.Element => {
+const TenantsPage = () => {
   const user = useStore(state => state.user);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,6 +47,10 @@ const TenantsPage = (): JSX.Element => {
 
   const handleCreate = async (): Promise<void> => {
     if (!form.name || !form.slug || !form.adminEmail || !form.adminName || !form.adminPassword) { setCreateError("Tous les champs sont requis"); return; }
+    if (!isValidNewPassword(form.adminPassword)) {
+      setCreateError(passwordRequirements);
+      return;
+    }
     try {
       await api.post("/api/v1/tenants", form);
       setShowAdd(false);

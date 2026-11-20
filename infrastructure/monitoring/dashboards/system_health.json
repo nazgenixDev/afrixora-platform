@@ -112,7 +112,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  time as time,\n  value as value,\n  device_id as metric\nFROM sensor_readings\nWHERE\n  $__timeFilter(time) AND\n  metric = 'power_w' AND\n  time > now() - interval '24 hours'\nORDER BY time ASC",
+          "rawSql": "SELECT\n  time as time,\n  value as value,\n  device_id as metric\nFROM grafana_power_readings\nWHERE\n  $__timeFilter(time) AND\n  time > now() - interval '24 hours'\nORDER BY time ASC",
           "refId": "A",
           "sql": {
             "columns": [
@@ -210,7 +210,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  name as metric,\n  CASE WHEN \"isOnline\" = true THEN 1 ELSE 0 END as value\nFROM \"Device\"\nORDER BY name",
+          "rawSql": "SELECT\n  name as metric,\n  CASE WHEN \"isOnline\" = true THEN 1 ELSE 0 END as value\nFROM grafana_devices\nORDER BY name",
           "refId": "A",
           "sql": {
             "columns": [
@@ -296,7 +296,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  count(*) as value,\n  'Unread Alerts' as metric\nFROM \"Alert\"\nWHERE \"isRead\" = false",
+          "rawSql": "SELECT\n  unread as value,\n  'Unread Alerts' as metric\nFROM grafana_alert_counts",
           "refId": "A",
           "sql": {
             "columns": [
@@ -380,7 +380,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  type as metric,\n  count(*) as value\nFROM \"Device\"\nGROUP BY type\nORDER BY count(*) DESC",
+          "rawSql": "SELECT\n  type as metric,\n  count(*) as value\nFROM grafana_devices\nGROUP BY type\nORDER BY count(*) DESC",
           "refId": "A",
           "sql": {
             "columns": [

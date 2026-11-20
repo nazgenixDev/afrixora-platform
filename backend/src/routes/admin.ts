@@ -3,7 +3,7 @@ import authenticate from "../middleware/authenticate";
 import { authorize } from "../middleware/authorize";
 import prisma from "../utils/database";
 import { query } from "../utils/database";
-import { energySamplesSql, energyTimeZone, latestPowerW, totalEnergySql } from "../services/energyQueries";
+import { energySamplesSql, energyTimeZone, latestGlobalPowerW, totalEnergySql } from "../services/energyQueries";
 
 const dailyStart = `time_bucket(INTERVAL '1 day', NOW(), '${energyTimeZone}')`;
 const rollingStart = "NOW() - $1::integer * INTERVAL '1 hour'";
@@ -50,7 +50,7 @@ router.get(
         globalConsumption(rollingStart, true, [168]),
         globalConsumption(rollingStart, true, [720]),
         globalConsumption(rollingStart, true, [8760]),
-        latestPowerW(),
+        latestGlobalPowerW(),
         query(
           `WITH ${energySamplesSql(rollingStart, "NOW()", true, false)},
            device_totals AS (

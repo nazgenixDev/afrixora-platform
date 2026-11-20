@@ -8,6 +8,7 @@ import { getRedisClient, isRedisConnected } from '../utils/redis';
 import automationEngine from './automationEngine';
 
 let mqttClient: mqtt.MqttClient | null = null;
+let subscriptionsReady = false;
 let retryRunning = false;
 
 const BUFFER_KEY_PREFIX = 'mqtt_buffer:';
@@ -20,6 +21,7 @@ const MAX_FUTURE_TIMESTAMP_MS = 24 * 60 * 60_000;
 const MAX_RETRY_ENTRIES = 1000;
 const DEVICE_CACHE_TTL_MS = 60_000;
 const MAX_DEVICE_CACHE_ENTRIES = 10_000;
+const MAX_PAYLOAD_BYTES = 64 * 1024;
 
 type DeviceScope = { tenantId: string; buildingId: string; deviceId: string };
 type Measurement = DeviceScope & { metric: string; value: number; unit: string | null };
@@ -29,10 +31,10 @@ const isoTimestamp = z.string().datetime({ offset: true });
 
 const bufferedEntrySchema = z.object({
   id: z.string().optional(),
-  tenantId: z.string().uuid(),
-  buildingId: z.string().min(1),
-  deviceId: z.string().uuid(),
-  metric: z.string().min(1).refine((metric) => !metric.includes('\0')),
+  tenantId: z.guid(),
+  buildingId: z.guid(),
+  deviceId: z.guid(),
+  metric: z.string().min(1).max(80).refine((metric) => !metric.includes('\0')),
   value: z.unknown(),
   unit: z.unknown(),
   timestamp: z.union([z.string(), z.number().int()]),
@@ -55,7 +57,7 @@ function numericMetric(value: unknown): number | undefined {
 }
 
 function metricUnit(value: unknown): string | null {
-  return typeof value === 'string' && !value.includes('\0') ? value : null;
+  return typeof value === 'string' && value.length <= 32 && !value.includes('\0') ? value : null;
 }
 
 function readingTime(value: unknown, receivedAt: number): Date | null {
@@ -74,7 +76,7 @@ function deviceCacheKey({ tenantId, buildingId, deviceId }: DeviceScope): string
 }
 
 function deviceWhere({ tenantId, buildingId, deviceId }: DeviceScope) {
-  return { id: deviceId, tenantId, buildingId, building: { tenantId } };
+  return { id: deviceId, tenantId, buildingId, building: { tenantId, isActive: true, tenant: { isActive: true } } };
 }
 
 async function belongsToScope(scope: DeviceScope): Promise<boolean> {
@@ -103,16 +105,20 @@ async function belongsToScope(scope: DeviceScope): Promise<boolean> {
 }
 
 async function insertReading(
-  { tenantId, deviceId, metric, value, unit }: Measurement,
+  { tenantId, buildingId, deviceId, metric, value, unit }: Measurement,
   time: Date | null
-): Promise<void> {
-  await query(
+): Promise<boolean> {
+  const result = await query(
     `INSERT INTO sensor_readings (time, tenant_id, device_id, metric, value, unit)
-     SELECT COALESCE($1::timestamptz, NOW()), "id"::uuid, $3::uuid, $4, $5, $6
-     FROM "Tenant" WHERE "id" = $2
-     FOR KEY SHARE`,
-    [time, tenantId, deviceId, metric, value, unit]
+     SELECT COALESCE($1::timestamptz, NOW()), t.id::uuid, d.id::uuid, $5, $6, $7
+     FROM "Tenant" t
+     JOIN "Building" b ON b."tenantId" = t.id AND b.id = $3 AND b."isActive"
+     JOIN "Device" d ON d."buildingId" = b.id AND d."tenantId" = t.id AND d.id = $4
+     WHERE t.id = $2 AND t."isActive"
+     FOR SHARE OF t, b, d`,
+    [time, tenantId, buildingId, deviceId, metric, value, unit]
   );
+  return result.rowCount === 1;
 }
 
 /**
@@ -126,6 +132,10 @@ export const getMqttClient = (): mqtt.MqttClient => {
   }
   return mqttClient;
 };
+
+export function isMqttReady(): boolean {
+  return mqttClient?.connected === true && subscriptionsReady;
+}
 
 /**
  * Publish a message to an MQTT topic using the shared client
@@ -177,7 +187,7 @@ async function bufferMessage(reading: Measurement, time: Date): Promise<void> {
     logger.warn('Mesure MQTT mise en attente dans Redis', { tenantId, deviceId, metric });
   } catch (error) {
     logger.error('Mesure MQTT perdue : mise en attente dans Redis impossible', {
-      tenantId, deviceId, metric, error: (error as Error).message,
+      tenantId, deviceId, errorType: (error as Error).name,
     });
   }
 }
@@ -219,9 +229,7 @@ async function retryEntry(key: string, raw: string, token: string): Promise<void
       );
       if (current !== 1) return;
       try {
-        if (await belongsToScope(entry)) {
-          await insertReading({ ...entry, value, unit: metricUnit(entry.unit) }, time);
-        } else {
+        if (!await insertReading({ ...entry, value, unit: metricUnit(entry.unit) }, time)) {
           discarded = 'appareil hors du périmètre';
         }
       } catch {
@@ -274,7 +282,7 @@ async function retryBuffer(): Promise<void> {
         if (renewed !== 1) lockHeld = false;
       } catch (error) {
         lockHeld = false;
-        logger.warn('Renouvellement du verrou de rejeu MQTT impossible', { error: (error as Error).message });
+        logger.warn('Renouvellement du verrou de rejeu MQTT impossible', { errorType: (error as Error).name });
       }
     }, RETRY_LOCK_SECONDS * 1000 / 3);
 
@@ -304,7 +312,7 @@ async function retryBuffer(): Promise<void> {
       );
     }
   } catch (error) {
-    logger.error('Erreur durant le rejeu MQTT', { error: (error as Error).message });
+    logger.error('Erreur durant le rejeu MQTT', { errorType: (error as Error).name });
   } finally {
     retryRunning = false;
   }
@@ -323,10 +331,11 @@ export const connectMQTT = (io: Server): void => {
     clientId: `afrixora-backend-${Math.random().toString(16).substring(2, 8)}`,
   };
 
-  logger.info(`Connecting to MQTT broker at ${url}`);
+  logger.info('mqtt_connecting');
   mqttClient = mqtt.connect(url, options);
 
   mqttClient.on('connect', () => {
+    subscriptionsReady = false;
     logger.info('Connected to MQTT broker');
     
     // Subscribe to topics
@@ -336,9 +345,11 @@ export const connectMQTT = (io: Server): void => {
       'afrixora/+/+/gateways/+/status'
     ];
     
-    mqttClient!.subscribe(topics, { qos: 1 }, (err) => {
-      if (err) {
-        logger.error('Failed to subscribe to MQTT topics', { error: err.message });
+    mqttClient!.subscribe(topics, { qos: 1 }, (err, grants) => {
+      subscriptionsReady = !err && !!grants && grants.length === topics.length
+        && grants.every(({ qos }) => qos < 128);
+      if (!subscriptionsReady) {
+        logger.error('mqtt_subscribe_failed', { errorType: err?.name });
       } else {
         logger.info('Subscribed to MQTT topics', { topics });
       }
@@ -354,7 +365,7 @@ export const connectMQTT = (io: Server): void => {
   });
 
   mqttClient.on('error', (error) => {
-    logger.error('MQTT client error', { error: error.message });
+    logger.error('mqtt_client_error', { errorType: error.name });
   });
 
   mqttClient.on('message', async (topic, payload) => {
@@ -362,22 +373,27 @@ export const connectMQTT = (io: Server): void => {
     try {
       const parts = topic.split('/');
       const [prefix, tenantId, buildingId, resource, id, kind] = parts;
-      if (parts.length !== 6 || prefix !== 'afrixora' || !tenantId || !buildingId || !id) {
-        logger.warn('Topic MQTT invalide', { topic });
+      const identifier = /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i;
+      if (parts.length !== 6 || prefix !== 'afrixora' || ![tenantId, buildingId, id].every((value) => identifier.test(value))) {
+        logger.warn('mqtt_topic_invalid');
         return;
       }
       const isDeviceMessage = resource === 'devices' && (kind === 'readings' || kind === 'events');
       const isGatewayStatus = resource === 'gateways' && kind === 'status';
       if (!isDeviceMessage && !isGatewayStatus) return;
+      if (payload.length > MAX_PAYLOAD_BYTES) {
+        logger.warn('mqtt_payload_too_large', { tenantId, buildingId, id });
+        return;
+      }
 
       const scope = { tenantId, buildingId, deviceId: id };
       if (isDeviceMessage && !await belongsToScope(scope)) {
-        logger.warn('Message MQTT rejeté : appareil hors du périmètre', { topic });
+        logger.warn('mqtt_device_scope_rejected', scope);
         return;
       }
       const payloadData: unknown = JSON.parse(payload.toString());
       if (!isRecord(payloadData)) {
-        logger.warn('Le payload MQTT doit être un objet JSON', { topic });
+        logger.warn('mqtt_payload_invalid', scope);
         return;
       }
 
@@ -389,17 +405,17 @@ export const connectMQTT = (io: Server): void => {
         }
       } else {
         const result = await prisma.gateway.updateMany({
-          where: { id, tenantId, buildingId, building: { tenantId } },
+          where: { id, tenantId, buildingId, building: { tenantId, isActive: true, tenant: { isActive: true } } },
           data: {
             isOnline: true,
             lastSeen: new Date(),
-            version: typeof payloadData.version === 'string' ? payloadData.version : null,
+            version: typeof payloadData.version === 'string' ? payloadData.version.slice(0, 100) : null,
           },
         });
-        if (result.count === 0) logger.warn('Statut MQTT rejeté : passerelle hors du périmètre', { topic });
+        if (result.count === 0) logger.warn('mqtt_gateway_scope_rejected', { tenantId, buildingId, gatewayId: id });
       }
     } catch (error) {
-      logger.error('Erreur de traitement du message MQTT', { topic, error: (error as Error).message });
+      logger.error('mqtt_message_failed', { errorType: (error as Error).name });
     }
   });
 
@@ -433,26 +449,31 @@ async function handleDeviceReadings(
 
   const units = isRecord(payload.units) ? payload.units : {};
   const metrics: Record<string, number> = Object.create(null);
+  const acceptedUnits: Record<string, string> = Object.create(null);
   const timestamp = readingTime(payload.timestamp, receivedAt);
   for (const [metric, rawValue] of Object.entries(payload.metrics)) {
     const value = numericMetric(rawValue);
-    if (value === undefined || !metric || metric.includes('\0')) {
-      logger.warn('Métrique MQTT ignorée : nom ou valeur invalide', { ...scope, metric });
+    if (value === undefined || !metric || metric.length > 80 || metric.includes('\0')) {
+      logger.warn('mqtt_metric_invalid', scope);
       continue;
     }
 
-    metrics[metric] = value;
-    const reading = { ...scope, metric, value, unit: metricUnit(units[metric]) };
+    const unit = metricUnit(units[metric]);
+    const reading = { ...scope, metric, value, unit };
     try {
-      await insertReading(reading, timestamp);
+      if (!await insertReading(reading, timestamp)) return;
     } catch (error) {
-      logger.error('Insertion TimescaleDB impossible', { ...scope, metric, error: (error as Error).message });
+      logger.error('mqtt_reading_insert_failed', { ...scope, errorType: (error as Error).name });
       await bufferMessage(reading, timestamp ?? new Date(receivedAt));
     }
+    metrics[metric] = value;
+    if (unit !== null) acceptedUnits[metric] = unit;
   }
 
   if (!await markDeviceSeen(scope)) return;
-  io.to(`building:${buildingId}`).emit('device:reading', { ...payload, deviceId });
+  io.to(`building:${buildingId}`).emit('device:reading', {
+    timestamp: (timestamp ?? new Date(receivedAt)).toISOString(), deviceId, metrics, units: acceptedUnits,
+  });
   if (Object.keys(metrics).length > 0) {
     await automationEngine.evaluate(tenantId, buildingId, deviceId, metrics, io);
   }
@@ -466,7 +487,7 @@ function startOfflineDetectionJob(io: Server): void {
     try {
       const stale = { isOnline: true, lastSeen: { lt: new Date(Date.now() - offlineThresholdMs) } };
       const devices = await prisma.device.findMany({
-        where: stale,
+        where: { ...stale, building: { isActive: true, tenant: { isActive: true } } },
         select: { id: true, tenantId: true, buildingId: true, name: true, lastSeen: true },
       });
 
@@ -499,12 +520,12 @@ function startOfflineDetectionJob(io: Server): void {
           }
         } catch (error) {
           logger.error('Impossible de signaler la mise hors ligne de l’appareil', {
-            tenantId, buildingId, deviceId: id, error: (error as Error).message,
+            tenantId, buildingId, deviceId: id, errorType: (error as Error).name,
           });
         }
       }
     } catch (error) {
-      logger.error('Erreur durant la détection des appareils hors ligne', { error: (error as Error).message });
+      logger.error('Erreur durant la détection des appareils hors ligne', { errorType: (error as Error).name });
     }
   }, intervalMs);
 }

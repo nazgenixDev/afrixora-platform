@@ -7,6 +7,8 @@ set -euo pipefail
 : "${AUTH_EMAIL:?Indiquer l’adresse du compte admin de test}"
 : "${AUTH_PASSWORD:?Indiquer le mot de passe du compte admin de test}"
 api="${BASE_URL%/}/api/v1"
+# Indiquer l’origine du frontend lorsqu’elle diffère de celle de l’API.
+app_origin="${APP_ORIGIN:-${BASE_URL%/}}"
 
 tmp="$(mktemp -d)"
 body="$tmp/body"
@@ -30,7 +32,7 @@ fail() {
 expect_status() {
   local expected="$1" description="$2" status
   shift 2
-  status="$(curl --silent --show-error --max-time 15 --output "$body" --write-out '%{http_code}' "$@")" ||
+  status="$(curl --silent --show-error --max-time 15 --header "Origin: $app_origin" --output "$body" --write-out '%{http_code}' "$@")" ||
     fail "$description — requête curl impossible"
   [[ "$status" == "$expected" ]] || fail "$description — HTTP $status, attendu $expected"
 }
@@ -47,6 +49,8 @@ expect_status 200 "connexion du compte admin de test" -H 'Content-Type: applicat
   --cookie-jar "$cookies" --data-binary @- "$api/auth/login" <<< "$valid_login"
 unset valid_login
 user_id="$(jq -er '.user.id' "$body")"
+jq -e 'has("accessToken") | not' "$body" >/dev/null ||
+  fail "la réponse navigateur divulgue le jeton d’accès"
 
 latest_me_log() {
   expect_status 200 "consultation des ApiLog" --cookie "$cookies" --get \
@@ -98,6 +102,6 @@ expect_invalid_credentials
 for ((attempt = 2; attempt <= 31; attempt++)); do
   expected=200
   if ((attempt == 31)); then expected=429; fi
-  expect_status "$expected" "rafraîchissement $attempt" --cookie "$cookies" --request POST "$api/auth/refresh"
+  expect_status "$expected" "rafraîchissement $attempt" --cookie "$cookies" --cookie-jar "$cookies" +    --request POST "$api/auth/refresh"
 done
 printf 'OK — quota de rafraîchissement indépendant, 429 à la 31e requête\n'

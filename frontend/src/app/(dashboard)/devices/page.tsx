@@ -140,6 +140,8 @@ const DevicesPage = () => {
   const user = useStore(state => state.user);
   const canEdit = user && ['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN'].includes(user.role);
   const canControl = user && user.role !== 'VIEWER';
+  const controllableDevices = canControl ? devices.filter(({ type }) => type === 'LIGHT' || type === 'PLUG') : [];
+  const controllableIds = new Set(controllableDevices.map(({ id }) => id));
 
   useEffect(() => {
     const controller = new AbortController();
@@ -168,6 +170,7 @@ const DevicesPage = () => {
   };
 
   const toggleDevice = async (id: string, newState: boolean) => {
+    if (!controllableIds.has(id)) return;
     try {
       await api.post(`/api/v1/devices/${id}/control`, {
         command: 'set_state',
@@ -181,14 +184,7 @@ const DevicesPage = () => {
   };
 
   const bulkToggle = async (state: boolean) => {
-    const cmd = state ? 'on' : 'off';
-    await Promise.all(
-      Array.from(selectedIds).map(id =>
-        api.post(`/api/v1/devices/${id}/control`, { command: 'set_state', params: { state: cmd } })
-      )
-    );
-    updateItems(prev => prev.map(d => selectedIds.has(d.id) ? { ...d, config: { ...d.config, state: cmd } } : d));
-    selectedIds.forEach(id => updateDevice(id, { config: { state: cmd } } as any));
+    await Promise.all([...selectedIds].map(id => toggleDevice(id, state)));
   };
 
   const handleBuildingChange = (buildingId: string) => {
@@ -225,7 +221,7 @@ const DevicesPage = () => {
           <button className={`px-3 py-1 text-sm ${viewMode === 'table' ? 'bg-emerald-600 text-white' : 'bg-card'}`} onClick={() => setViewMode('table')}>Tableau</button>
           <button className={`px-3 py-1 text-sm ${viewMode === 'grid' ? 'bg-emerald-600 text-white' : 'bg-card'}`} onClick={() => setViewMode('grid')}>Grille</button>
         </div>
-        {selectedIds.size > 0 && (
+        {controllableDevices.some(({ id }) => selectedIds.has(id)) && (
           <div className="flex gap-1">
             <Button variant="outline" size="sm" onClick={() => bulkToggle(true)}>Allumer</Button>
             <Button variant="outline" size="sm" onClick={() => bulkToggle(false)}>Éteindre</Button>
@@ -265,7 +261,7 @@ const DevicesPage = () => {
           <table className="w-full text-sm">
             <thead className="bg-muted/50">
               <tr>
-                <th className="p-3 text-left"><input type="checkbox" aria-label="Sélectionner les appareils de cette page" checked={devices.length > 0 && selectedIds.size === devices.length} onChange={e => setSelectedIds(e.target.checked ? new Set(devices.map(d => d.id)) : new Set())} /></th>
+                <th className="p-3 text-left"><input type="checkbox" aria-label="Sélectionner les appareils pilotables" disabled={controllableIds.size === 0} checked={controllableIds.size > 0 && controllableDevices.every(({ id }) => selectedIds.has(id))} onChange={e => setSelectedIds(e.target.checked ? controllableIds : new Set())} /></th>
                 <th className="p-3 text-left">Appareil</th>
                 <th className="p-3 text-left">Type</th>
                 <th className="p-3 text-left">Zone</th>
@@ -277,7 +273,7 @@ const DevicesPage = () => {
             <tbody>
               {devices.map(d => (
                 <tr key={d.id} className="border-t hover:bg-muted/20 cursor-pointer" onClick={() => setDrawerDevice(d)}>
-                  <td className="p-3"><input type="checkbox" checked={selectedIds.has(d.id)} onChange={() => { const copy = new Set(selectedIds); copy.has(d.id) ? copy.delete(d.id) : copy.add(d.id); setSelectedIds(copy); }} onClick={e => e.stopPropagation()} /></td>
+                  <td className="p-3"><input type="checkbox" aria-label={`Sélectionner ${d.name}`} disabled={!controllableIds.has(d.id)} checked={controllableIds.has(d.id) && selectedIds.has(d.id)} onChange={() => { const copy = new Set(selectedIds); copy.has(d.id) ? copy.delete(d.id) : copy.add(d.id); setSelectedIds(copy); }} onClick={e => e.stopPropagation()} /></td>
                   <td className="p-3">
                     <div className="font-medium">{d.name}</div>
                     <div className="text-xs text-muted-foreground">{d.id}</div>
@@ -285,7 +281,7 @@ const DevicesPage = () => {
                   <td className="p-3"><Badge className={TYPE_BADGES[d.type] || ""}>{TYPE_LABELS[d.type] || d.type}</Badge></td>
                   <td className="p-3 text-muted-foreground">{d.zone?.name || "—"}</td>
                   <td className="p-3"><Badge variant={d.isOnline ? "default" : "destructive"} className="text-xs">{d.isOnline ? "En ligne" : "Hors ligne"}</Badge></td>
-                  <td className="p-3"><Switch checked={d.config?.state === 'on' || d.config?.power === 'on'} onCheckedChange={checked => toggleDevice(d.id, checked)} onClick={e => e.stopPropagation()} /></td>
+                  <td className="p-3"><Switch disabled={!controllableIds.has(d.id)} checked={d.config?.state === 'on' || d.config?.power === 'on'} onCheckedChange={checked => toggleDevice(d.id, checked)} onClick={e => e.stopPropagation()} /></td>
                   <td className="p-3">
                     <div className="flex gap-1 opacity-0 hover:opacity-100 transition-opacity">
                       <Button variant="ghost" size="icon" onClick={e => { e.stopPropagation(); setDrawerDevice(d); }}>⋯</Button>
@@ -302,7 +298,7 @@ const DevicesPage = () => {
             <Card key={d.id} className={`p-4 cursor-pointer hover:shadow-md transition-shadow ${d.config?.state === "on" ? "border-emerald-500/30 bg-emerald-500/5" : ""}`} onClick={() => setDrawerDevice(d)}>
               <div className="flex items-center justify-between mb-3">
                 <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-500 font-bold text-xs">{d.type[0]}</div>
-                <Switch checked={d.config?.state === 'on' || d.config?.power === 'on'} onCheckedChange={checked => toggleDevice(d.id, checked)} onClick={e => e.stopPropagation()} />
+                <Switch disabled={!controllableIds.has(d.id)} checked={d.config?.state === 'on' || d.config?.power === 'on'} onCheckedChange={checked => toggleDevice(d.id, checked)} onClick={e => e.stopPropagation()} />
               </div>
               <div className="font-medium truncate">{d.name}</div>
               <div className="text-xs text-muted-foreground">{d.zone?.name || "—"} · {d.isOnline ? <span className="text-emerald-400">En ligne</span> : <span className="text-red-400">Hors ligne</span>}</div>

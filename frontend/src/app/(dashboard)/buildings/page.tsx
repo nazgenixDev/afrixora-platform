@@ -19,7 +19,7 @@ interface Building {
   id: string; name: string; address: string; city: string; unitsCount: number; isActive: boolean; _count?: { zones: number; devices: number };
 }
 
-const BuildingsPage = (): JSX.Element => {
+const BuildingsPage = () => {
   const user = useStore(state => state.user);
   const canEdit = user && ['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN'].includes(user.role);
   const { result, loading, error, setPage, reload } = usePaginatedList<Building>("/api/v1/buildings");

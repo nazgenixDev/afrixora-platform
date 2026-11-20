@@ -1,6 +1,7 @@
 import crypto from "crypto";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import prisma from "../utils/database";
+import { NotFoundError } from "../utils/errors";
 
 // Les passerelles sont authentifiées par MQTT tant qu'aucune route HTTP ne leur est dédiée.
 export const apiKeyScopes = ["read", "write", "full"] as const;
@@ -44,16 +45,18 @@ export const apiKeyService = {
     return { ...metadata, key };
   },
 
-  async toggleStatus(id: string, tenantId: string) {
-    const existing = await prisma.apiKey.findFirst({
-      where: { id, tenantId },
-      select: { isActive: true },
-    });
-    if (!existing) throw new Error("Clé API introuvable");
-    return prisma.apiKey.update({
-      where: { id, tenantId },
-      data: { isActive: !existing.isActive },
-      select: publicApiKeyFields,
-    });
+  async revoke(id: string, tenantId: string) {
+    try {
+      return await prisma.apiKey.update({
+        where: { id, tenantId },
+        data: { isActive: false },
+        select: publicApiKeyFields,
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        throw new NotFoundError('Clé API introuvable');
+      }
+      throw error;
+    }
   },
 };

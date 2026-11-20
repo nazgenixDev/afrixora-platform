@@ -22,10 +22,12 @@ services:
       retries: 5
       start_period: 30s
     networks:
-      - afrixora_net
+      - database_api
+      - database_monitoring
+      - database_backup
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     restart: unless-stopped
     deploy:
       resources:
@@ -36,16 +38,21 @@ services:
       - "6379"
     volumes:
       - afrixora_redis_data:/data
-    command: >
-      redis-server --requirepass "${REDIS_PASSWORD}" --appendonly yes
+      - ./infrastructure/docker/redis-start.sh:/usr/local/bin/redis-start.sh:ro
+    tmpfs:
+      - /run/redis-auth:mode=0755,nosuid,nodev,noexec
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    entrypoint: ["/bin/sh", "/usr/local/bin/redis-start.sh"]
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD-SHELL", '[ "$$(redis-cli --user afrixora_api ping)" = PONG ]']
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
     networks:
-      - afrixora_net
+      - redis_api
 
   mosquitto:
     image: eclipse-mosquitto:2
@@ -62,9 +69,20 @@ services:
       - afrixora_mosquitto_data:/mosquitto/data
       - afrixora_mosquitto_log:/mosquitto/log
       - ./infrastructure/docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ./infrastructure/docker/mosquitto_passwd:/mosquitto/config/passwd:ro
+      - type: bind
+        source: ${MQTT_AUTH_PATH:-./infrastructure/docker/mqtt-auth}
+        target: /run/mqtt-auth
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD-SHELL", "nc -w 2 127.0.0.1 1883 </dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
-      - afrixora_net
+      - mqtt_api
+      - mqtt_ingress
 
   api:
     build: ./backend
@@ -78,8 +96,8 @@ services:
       - "4000"
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://afrixora:${DB_PASSWORD}@postgres:5432/afrixora_prod
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - DATABASE_URL=postgresql://afrixora_api:${DB_API_URL_PASSWORD:-${DB_API_PASSWORD}}@postgres:5432/afrixora_prod
+      - REDIS_URL=redis://afrixora_api:${REDIS_URL_PASSWORD:-${REDIS_PASSWORD}}@redis:6379
       - JWT_SECRET=${JWT_SECRET}
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
@@ -88,26 +106,23 @@ services:
       - MQTT_API_USER=${MQTT_API_USER}
       - MQTT_API_PASSWORD=${MQTT_API_PASSWORD}
       - RESEND_API_KEY=${RESEND_API_KEY}
+      - RESEND_FROM=${RESEND_FROM:-}
       - DOMAIN=${DOMAIN}
       - CORS_ORIGINS=${CORS_ORIGINS}
-      - TRUST_PROXY_HOPS=${TRUST_PROXY_HOPS:-1}
+      - TRUST_PROXY_HOPS=${TRUST_PROXY_HOPS:-2}
       - ENERGY_COST_PER_KWH=${ENERGY_COST_PER_KWH}
-      # Mot de passe du compte admin créé par `prisma db seed`.
-      # Obligatoire en production : le seed refuse de s'exécuter sinon.
-      - SEED_ADMIN_PASSWORD=${SEED_ADMIN_PASSWORD}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       mosquitto:
-        condition: service_started
+        condition: service_healthy
     networks:
-      - afrixora_net
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`api.${DOMAIN}`)"
-      - "traefik.http.services.api.loadbalancer.server.port=4000"
+      - api_ingress
+      - database_api
+      - redis_api
+      - mqtt_api
 
   frontend:
     build:
@@ -127,68 +142,74 @@ services:
     depends_on:
       - api
     networks:
-      - afrixora_net
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`)"
-      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+      - frontend_ingress
 
   postgres-backup:
-    image: postgres:15-alpine
+    build:
+      context: ./infrastructure
+      dockerfile: docker/backup.Dockerfile
     restart: unless-stopped
     volumes:
-      - ./backups:/backups
-      - ./infrastructure/scripts/backup.sh:/usr/local/bin/backup.sh:ro
+      - ${BACKUP_STORAGE_PATH:-./backups}:/backups
+      - type: bind
+        source: ${BACKUP_CERT_PATH:-./infrastructure/docker/backup-cert.pem}
+        target: /run/backup-cert.pem
+        read_only: true
+        bind:
+          create_host_path: false
     environment:
-      - DB_PASSWORD=${DB_PASSWORD}
-      - POSTGRES_USER=afrixora
-      - POSTGRES_DB=afrixora_prod
-      - PGPASSWORD=${DB_PASSWORD}
-      - PGUSER=afrixora
+      - PGPASSWORD=${DB_BACKUP_PASSWORD}
+      - PGUSER=afrixora_backup
       - PGHOST=postgres
       - PGDATABASE=afrixora_prod
-    entrypoint: |
-      sh -c "
-      chmod +x /usr/local/bin/backup.sh
-      echo '0 2 * * * /usr/local/bin/backup.sh' > /etc/crontabs/root
-      crond -f -l 2
-      "
+      - TZ=Africa/Lubumbashi
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/backup.sh", "--check"]
+      interval: 1m
+      timeout: 5s
+      retries: 3
     depends_on:
       postgres:
         condition: service_healthy
     networks:
-      - afrixora_net
+      - database_backup
 
   traefik:
     image: traefik:v3.7.19
     restart: unless-stopped
     expose:
       - "80"
+    environment:
+      DOMAIN: ${DOMAIN}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - afrixora_traefik_data:/etc/traefik
+      - ./infrastructure/docker/traefik:/etc/traefik/dynamic:ro
     command:
       - "--api.insecure=false"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
+      - "--providers.file.filename=/etc/traefik/dynamic/routes.yml"
       - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.forwardedheaders.trustedips=${TUNNEL_INGRESS_SUBNET:-10.253.247.0/29}"
       - "--log.level=INFO"
     networks:
-      - afrixora_net
+      - tunnel_ingress
+      - api_ingress
+      - frontend_ingress
+      - monitoring_ingress
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.11.0}
     restart: unless-stopped
-    command: tunnel run
+    command: tunnel --no-autoupdate run
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
     depends_on:
       - traefik
     networks:
-      - afrixora_net
+      - tunnel_ingress
+      - tunnel_egress
+      - mqtt_ingress
 
   grafana:
-    image: grafana/grafana:latest
+    image: ${GRAFANA_IMAGE:-grafana/grafana:13.3.1}
     restart: unless-stopped
     expose:
       - "3000"
@@ -197,11 +218,10 @@ services:
       - ./infrastructure/monitoring/datasources:/etc/grafana/provisioning/datasources:ro
       - ./infrastructure/monitoring/dashboards:/etc/grafana/provisioning/dashboards:ro
     environment:
-      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_GRAFANA_PASSWORD=${DB_GRAFANA_PASSWORD}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=https://grafana.${DOMAIN}
-      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
     healthcheck:
       test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:3000/api/health"]
       interval: 10s
@@ -211,11 +231,8 @@ services:
     depends_on:
       - postgres
     networks:
-      - afrixora_net
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN}`)"
-      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+      - monitoring_ingress
+      - database_monitoring
 
 volumes:
   afrixora_postgres_data:
@@ -223,8 +240,27 @@ volumes:
   afrixora_mosquitto_data:
   afrixora_mosquitto_log:
   afrixora_grafana_data:
-  afrixora_traefik_data:
 
 networks:
-  afrixora_net:
-    driver: bridge
+  tunnel_ingress:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${TUNNEL_INGRESS_SUBNET:-10.253.247.0/29}
+  tunnel_egress:
+  api_ingress:
+  frontend_ingress:
+    internal: true
+  monitoring_ingress:
+  database_api:
+    internal: true
+  database_monitoring:
+    internal: true
+  database_backup:
+    internal: true
+  redis_api:
+    internal: true
+  mqtt_api:
+    internal: true
+  mqtt_ingress:
+    internal: true

@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { AnyZodObject, ZodError } from 'zod';
-import logger from '../utils/logger';
+import type { ZodType } from 'zod';
 
 /**
  * Validation middleware factory
@@ -8,7 +7,7 @@ import logger from '../utils/logger';
  * @param schema Zod schema to validate against
  * @returns Middleware function
  */
-export const validate = (schema: AnyZodObject) => {
+export const validate = (schema: ZodType<{ body?: unknown; query?: unknown; params?: unknown }>) => {
   return (req: Request, res: Response, next: NextFunction) => {
     try {
       // Validate request data against schema
@@ -22,21 +21,6 @@ export const validate = (schema: AnyZodObject) => {
       return next();
       
     } catch (error) {
-      // Handle validation errors
-      if (error instanceof ZodError) {
-        logger.warn('Validation error', { 
-          path: req.path, 
-          errors: error.errors,
-          userId: req.user?.userId 
-        });
-        
-        return res.status(400).json({
-          error: 'Validation error',
-          details: error.errors,
-        });
-      }
-      
-      // Pass other errors to the global error handler
       next(error);
     }
   };

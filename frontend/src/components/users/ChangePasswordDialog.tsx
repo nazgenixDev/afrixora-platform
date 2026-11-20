@@ -1,5 +1,7 @@
 "use client";
 
+import { isValidNewPassword, passwordRequirements } from "@/lib/passwordPolicy";
+
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,8 +38,8 @@ const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ open, onOpe
       setError("Les nouveaux mots de passe ne correspondent pas");
       return;
     }
-    if (newPassword.length < 6) {
-      setError("Le mot de passe doit faire au moins 6 caractères");
+    if (!isValidNewPassword(newPassword)) {
+      setError(passwordRequirements);
       return;
     }
     setLoading(true);

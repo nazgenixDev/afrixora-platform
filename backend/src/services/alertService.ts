@@ -32,7 +32,11 @@ export const alertService = {
       if (!building) throw new NotFoundError('Bâtiment introuvable');
     }
 
-    const where: Prisma.AlertWhereInput = { buildingId, isRead, severity, type, tenantId };
+    const where: Prisma.AlertWhereInput = {
+      buildingId, isRead, severity, type, tenantId,
+      building: { tenantId },
+      OR: [{ deviceId: null }, { device: { tenantId } }],
+    };
     const [data, total] = await prisma.$transaction([
       prisma.alert.findMany({
         where,
@@ -47,7 +51,7 @@ export const alertService = {
   },
 
   async markAsRead(id: string, tenantId: string): Promise<Alert> {
-    const where = { id, tenantId };
+    const where = { id, tenantId, building: { tenantId }, OR: [{ deviceId: null }, { device: { tenantId } }] };
     const alert = await prisma.alert.findFirst({ where, select: { id: true } });
     if (!alert) throw new NotFoundError('Alerte introuvable');
 

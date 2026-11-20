@@ -17,10 +17,12 @@ import {
   LogOut,
   Smartphone,
   ChevronUp,
-  ChevronDown,
 } from "lucide-react";
 import useStore from "@/store";
 import Link from "next/link";
+import { logoutSession } from "@/lib/api";
+import { redirectToLogin } from "@/lib/auth";
+import { toast } from "sonner";
 
 interface UserMenuProps {
   collapsed?: boolean;
@@ -29,10 +31,18 @@ interface UserMenuProps {
 const UserMenu = ({ collapsed = false }: UserMenuProps) => {
   const user = useStore(state => state.user);
   const clearAuth = useStore(state => state.clearAuth);
+  const [loggingOut, setLoggingOut] = useState(false);
 
-  const handleLogout = () => {
-    clearAuth();
-    window.location.href = "/login";
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    try {
+      await logoutSession();
+      clearAuth();
+      redirectToLogin();
+    } catch {
+      toast.error("Déconnexion indisponible. Réessayez.");
+      setLoggingOut(false);
+    }
   };
 
   const getInitials = (name: string) => {
@@ -88,6 +98,7 @@ const UserMenu = ({ collapsed = false }: UserMenuProps) => {
           <DropdownMenuSeparator />
           <DropdownMenuItem
             className="cursor-pointer flex items-center gap-2 text-red-400 hover:text-red-300"
+            disabled={loggingOut}
             onClick={handleLogout}
           >
             <LogOut className="h-4 w-4" />
@@ -138,6 +149,7 @@ const UserMenu = ({ collapsed = false }: UserMenuProps) => {
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="cursor-pointer flex items-center gap-2 text-red-400 hover:text-red-300"
+          disabled={loggingOut}
           onClick={handleLogout}
         >
           <LogOut className="h-4 w-4" />

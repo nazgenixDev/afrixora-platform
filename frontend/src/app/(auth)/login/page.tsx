@@ -60,10 +60,7 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
-      const { data } = await api.post<{ accessToken?: string }>("/api/v1/auth/login", { email, password });
-      if (process.env.NODE_ENV === "development" && data.accessToken) {
-        localStorage.setItem("afrixora_token", data.accessToken);
-      }
+      await api.post("/api/v1/auth/login", { email, password });
       window.location.href = "/";
     } catch (err: unknown) {
       if (isAxiosError<{ error?: unknown }>(err) && err.response) {

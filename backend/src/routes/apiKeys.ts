@@ -10,11 +10,9 @@ const createApiKeySchema = z.object({
   body: z.object({
     name: z.string().trim().min(1).max(60),
     scope: z.enum(apiKeyScopes, {
-      errorMap: (_issue, context) => ({
-        message: context.data === "gateway"
-          ? "Aucune route HTTP ne prend en charge les clés de portée gateway."
-          : context.defaultError,
-      }),
+      error: (issue) => issue.input === "gateway"
+        ? "Aucune route HTTP ne prend en charge les clés de portée gateway."
+        : undefined,
     }),
   }).strict(),
 });
@@ -25,7 +23,6 @@ const router = Router();
 router.get(
   "/",
   authenticate,
-  requireApi,
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -55,16 +52,15 @@ router.post(
   }
 );
 
-// PATCH /api/v1/api-keys/:id/toggle
+// La révocation est définitive et reste disponible après un changement de plan.
 router.patch(
-  "/:id/toggle",
+  "/:id/revoke",
   authenticate,
-  requireApi,
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const result = await apiKeyService.toggleStatus(
-        req.params.id,
+      const result = await apiKeyService.revoke(
+        z.guid().parse(req.params.id),
         req.user!.tenantId
       );
       return res.json(result);

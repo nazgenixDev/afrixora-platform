@@ -23,6 +23,7 @@ test('P0-3 : authentification, isolation des bâtiments et diffusion légitime',
   const otherBuildingId = randomUUID();
   const userId = randomUUID();
   const adminId = randomUUID();
+  const browserOrigin = 'http://localhost:3000';
   const secret = randomBytes(32);
   const clients = [];
   const users = new Map([
@@ -56,6 +57,11 @@ test('P0-3 : authentification, isolation des bâtiments et diffusion légitime',
     user: { async findFirst({ where }) {
       const user = users.get(where.id);
       return user?.tenantId === where.tenantId ? user : null;
+    }, async findMany({ where }) {
+      return where.id.in.flatMap((id) => {
+        const user = users.get(id);
+        return user ? [{ id, ...user }] : [];
+      });
     } },
     building: { async findFirst({ where }) {
       buildingQueries++;
@@ -69,8 +75,8 @@ test('P0-3 : authentification, isolation des bâtiments et diffusion légitime',
   context.mock.method(require('@socket.io/redis-adapter'), 'createAdapter', () => new Server().adapter());
 
   const listen = http.Server.prototype.listen;
-  const loopback = context.mock.method(http.Server.prototype, 'listen', function (_port, callback) {
-    return listen.call(this, 0, '127.0.0.1', callback);
+  const loopback = context.mock.method(http.Server.prototype, 'listen', function (_port, hostOrCallback, callback) {
+    return listen.call(this, 0, '127.0.0.1', typeof hostOrCallback === 'function' ? hostOrCallback : callback);
   });
   try {
     require('../dist/server.js');
@@ -90,11 +96,11 @@ test('P0-3 : authentification, isolation des bâtiments et diffusion légitime',
     return jwt.sign({ userId: id, tenantId, jwtVersion }, process.env.JWT_SECRET, { expiresIn: '1m' });
   }
 
-  async function expectRefusal(options) {
+  async function expectRefusal(options, message = 'Unauthorized') {
     const client = openClient(options);
     const rejected = waitFor(client, 'connect_error');
     client.connect();
-    assert.equal((await rejected).message, 'Unauthorized');
+    assert.equal((await rejected).message, message);
     assert.equal(client.connected, false);
   }
 
@@ -108,7 +114,10 @@ test('P0-3 : authentification, isolation des bâtiments et diffusion légitime',
   await context.test('Refuse une connexion sans jeton ou avec une session invalide', async () => {
     await expectRefusal();
     await expectRefusal({ auth: { token: issueToken(userId, 1) } });
-    await expectRefusal({ auth: { token }, extraHeaders: { cookie: 'access_token=invalid' } });
+    await expectRefusal({ auth: { token }, extraHeaders: { cookie: 'access_token=invalid', origin: browserOrigin } });
+    await expectRefusal({
+      extraHeaders: { cookie: `access_token=${token}`, origin: 'http://autre.example' },
+    }, 'websocket error');
   });
 
   await context.test('Refuse un bâtiment étranger et ne livre aucune de ses mesures', async () => {
@@ -144,7 +153,7 @@ test('P0-3 : authentification, isolation des bâtiments et diffusion légitime',
   await context.test('Le cookie prioritaire permet au SUPER_ADMIN de recevoir une mesure d’un autre tenant', async () => {
     const client = openClient({
       auth: { token: 'invalid' },
-      extraHeaders: { cookie: `theme=dark; access_token=${issueToken(adminId)}` },
+      extraHeaders: { cookie: `theme=dark; access_token=${issueToken(adminId)}`, origin: browserOrigin },
     });
     const connected = waitFor(client, 'connect');
     client.connect();
@@ -155,5 +164,28 @@ test('P0-3 : authentification, isolation des bâtiments et diffusion légitime',
     const delivered = waitFor(client, 'device:reading');
     io.to(`building:${otherBuildingId}`).emit('device:reading', reading);
     assert.deepEqual(await delivered, reading);
+  });
+
+  await context.test('Ferme la connexion de la version révoquée', async () => {
+    const client = openClient({ auth: { token } });
+    const connected = waitFor(client, 'connect');
+    client.connect();
+    await connected;
+    const disconnected = waitFor(client, 'disconnect');
+    const { sessionEvents } = require('../dist/services/authService.js');
+    sessionEvents.emit('revoked', userId, 2);
+    assert.deepEqual(await disconnected, 'io server disconnect');
+  });
+
+  await context.test('Ferme une session dont le compte est désactivé depuis la connexion', async () => {
+    const client = openClient({ auth: { token } });
+    const connected = waitFor(client, 'connect');
+    client.connect();
+    await connected;
+    const disconnected = waitFor(client, 'disconnect');
+    users.get(userId).isActive = false;
+    const { revalidateSocketSessions } = require('../dist/middleware/socketAuth.js');
+    await revalidateSocketSessions(Array.from(io.sockets.sockets.values()));
+    assert.deepEqual(await disconnected, 'io server disconnect');
   });
 });

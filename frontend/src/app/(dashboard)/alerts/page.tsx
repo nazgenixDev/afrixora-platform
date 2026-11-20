@@ -27,7 +27,7 @@ interface AlertFilters {
   buildingId: string | "ALL";
 }
 
-const AlertsPage = (): JSX.Element => {
+const AlertsPage = () => {
   const [buildings, setBuildings] = useState<Building[]>([]);
   const [selectedBuilding, setSelectedBuilding] = useState<Building | null>(null);
   const [fetchedAlerts, setFetchedAlerts] = useState<Alert[]>([]);
@@ -43,6 +43,7 @@ const AlertsPage = (): JSX.Element => {
   const storeAlerts = useStore((state) => state.alerts);
   const addAlert = useStore((state) => state.addAlert);
   const tenantId = useStore((state) => state.user?.tenantId);
+  const canAcknowledge = useStore(({ user }) => !!user && user.role !== "VIEWER");
 
   const { isConnected } = useSocket({
     buildingId: selectedBuilding?.id,
@@ -156,7 +157,7 @@ const AlertsPage = (): JSX.Element => {
     setFilters((prev) => ({ ...prev, [key]: value }));
   };
 
-  const getSeverityBadge = (severity: Severity): JSX.Element => {
+  const getSeverityBadge = (severity: Severity) => {
     switch (severity) {
       case "INFO":
         return <Badge className="bg-blue-500">INFO</Badge>;
@@ -454,7 +455,7 @@ const AlertsPage = (): JSX.Element => {
                   <div className="text-sm text-muted-foreground">
                     {buildings.find((b) => b.id === alert.buildingId)?.name || "Bâtiment inconnu"}
                   </div>
-                  {!alert.isRead && (
+                  {canAcknowledge && !alert.isRead && (
                     <Button
                       variant="outline"
                       size="sm"
