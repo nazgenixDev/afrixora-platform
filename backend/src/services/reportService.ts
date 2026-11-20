@@ -32,8 +32,8 @@ export const generateCSV = async (
     }
     logger.info('CSV report generated successfully', { tenantId, buildingId, rowCount: result.rows.length });
     return csv;
-  } catch (error: any) {
-    logger.error('Error generating CSV report', { error: error.message, tenantId, buildingId });
+  } catch (error) {
+    logger.error('Error generating CSV report', { error: error instanceof Error ? error.message : String(error), tenantId, buildingId });
     throw new Error('Failed to generate CSV report');
   }
 };
@@ -150,8 +150,8 @@ export const generatePDF = async (
 
     logger.info('PDF report generated successfully', { tenantId, buildingId });
     return pdfBuffer;
-  } catch (error: any) {
-    logger.error('Error generating PDF report', { error: error.message, tenantId, buildingId });
+  } catch (error) {
+    logger.error('Error generating PDF report', { error: error instanceof Error ? error.message : String(error), tenantId, buildingId });
     throw new Error('Failed to generate PDF report');
   }
 };

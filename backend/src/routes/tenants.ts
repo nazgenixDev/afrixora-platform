@@ -75,7 +75,7 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN']), validate(createTenant
 // GET /tenants/current/subscription - current authenticated user's tenant subscription
 router.get('/current/subscription', authenticate, async (req, res, next) => {
   try {
-    const tenantId = (req as any).user.tenantId;
+    const tenantId = req.user!.tenantId;
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
     if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
 
@@ -108,7 +108,7 @@ router.get('/current/subscription', authenticate, async (req, res, next) => {
 // POST /tenants/current/upgrade-request - request plan change (tenant admin)
 router.post('/current/upgrade-request', authenticate, authorize(['TENANT_ADMIN']), validate(upgradeRequestSchema), async (req, res, next) => {
   try {
-    const tenantId = (req as any).user.tenantId;
+    const tenantId = req.user!.tenantId;
     const { requestedPlan } = req.body as { requestedPlan: 'BASIC' | 'PRO' | 'BUSINESS' | 'ENTERPRISE' };
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
     if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
@@ -120,7 +120,7 @@ router.post('/current/upgrade-request', authenticate, authorize(['TENANT_ADMIN']
 
     if (process.env.RESEND_API_KEY) {
       const resend = new Resend(process.env.RESEND_API_KEY);
-      const result = await resend.emails.send({
+      await resend.emails.send({
         from: 'AFRIXORA <onboarding@resend.dev>',
         to: superAdmin.email,
         subject: `Demande de changement de plan - ${tenant.name}`,
@@ -157,7 +157,7 @@ router.get('/:id/subscription', authenticate, authorize(['SUPER_ADMIN', 'TENANT_
     const tenant = await prisma.tenant.findUnique({ where: { id } });
     if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
 
-    const user = (req as any).user;
+    const user = req.user!;
     if (user.role === 'TENANT_ADMIN' && user.tenantId !== id) return res.status(403).json({ error: 'Forbidden' });
 
     const [deviceCount, automationCount] = await Promise.all([

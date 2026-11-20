@@ -13,15 +13,13 @@ interface TokenPayload {
 // Certains routeurs appliquent le middleware de session à deux niveaux.
 const authenticatedRequests = new WeakSet<Request>();
 
-declare global {
-  namespace Express {
-    interface Request {
-      user?: {
-        userId: string;
-        tenantId: string;
-        role: string;
-      };
-    }
+declare module 'express-serve-static-core' {
+  interface Request {
+    user?: {
+      userId: string;
+      tenantId: string;
+      role: string;
+    };
   }
 }
 

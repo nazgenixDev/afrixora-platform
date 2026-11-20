@@ -9,13 +9,13 @@
     "start": "node dist/server.js",
     "start:prod": "node dist/server.js",
     "lint": "eslint . --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@prisma/client": "^5.7.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "@types/pdfkit": "^0.17.6",
-    "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -34,7 +34,6 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
-    "@types/bcrypt": "^6.0.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^4.17.21",
@@ -42,12 +41,15 @@
     "@types/mqtt": "^2.5.0",
     "@types/node": "^20.10.5",
     "@types/pg": "^8.10.9",
+    "@types/supertest": "^7.2.1",
     "@typescript-eslint/eslint-plugin": "^6.15.0",
     "@typescript-eslint/parser": "^6.15.0",
     "eslint": "^8.56.0",
     "prisma": "^5.7.0",
+    "supertest": "^7.3.2",
     "ts-node-dev": "^2.0.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^3.2.7"
   },
   "engines": {
     "node": ">=20.0.0"

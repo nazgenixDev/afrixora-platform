@@ -1,36 +1,13 @@
-import express from 'express';
 import http from 'http';
 import { Server, type DefaultEventsMap } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
-import cors from 'cors';
-import helmet from 'helmet';
-import cookieParser from 'cookie-parser';
 import { z } from 'zod';
 import { prisma } from './utils/database';
 import logger from './utils/logger';
 import redisClient from './utils/redis';
 
-import authRoutes from './routes/auth';
-import buildingRoutes from './routes/buildings';
-import deviceRoutes from './routes/devices';
-import readingRoutes from './routes/readings';
-import energyRoutes from './routes/energy';
-import automationRoutes from './routes/automations';
-import alertRoutes from './routes/alerts';
-import reportRoutes from './routes/reports';
-import apiKeyRoutes from './routes/apiKeys';
-import apiLogRoutes from './routes/apiLogs';
-import userRoutes from './routes/users';
-import tenantRoutes from './routes/tenants';
-import adminRoutes from './routes/admin';
-
-import { errorHandler } from './middleware/errorHandler';
-import { requestLogger } from './middleware/requestLogger';
-import { authenticate } from './middleware/authenticate';
+import { createApp } from './app';
 import { socketAuth, type SocketData } from './middleware/socketAuth';
-import { authenticateOrApiKey } from './middleware/authenticateOrApiKey';
-import { apiKeyAuth } from './middleware/apiKeyAuth';
-
 import { connectMQTT } from './services/mqttWorker';
 import { startApiKeyUsageSync } from './services/apiKeyUsage';
 import { checkEnv } from './scripts/checkEnv';
@@ -45,7 +22,7 @@ if (!trustProxyHops.success) {
   throw new Error('TRUST_PROXY_HOPS doit être un entier positif ou nul');
 }
 
-const app = express();
+const app = createApp(trustProxyHops.data);
 const server = http.createServer(app);
 
 const io = new Server<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, SocketData>(server, {
@@ -58,45 +35,6 @@ const io = new Server<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, Sock
 
 io.adapter(createAdapter(redisClient, redisClient.duplicate()));
 io.use(socketAuth);
-
-app.use(helmet());
-app.set("trust proxy", trustProxyHops.data);
-app.use(cors({
-  origin: process.env.CORS_ORIGINS?.split(',') || 'http://localhost:3000',
-  credentials: true
-}));
-app.use(express.json());
-app.use(cookieParser());
-
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok' });
-});
-
-const apiRouter = express.Router();
-apiRouter.use(requestLogger);
-
-apiRouter.use('/auth', authRoutes);
-
-// Routes publiques (JWT ou clé API)
-apiRouter.use('/buildings', authenticateOrApiKey, buildingRoutes);
-apiRouter.use('/devices', authenticateOrApiKey, deviceRoutes);
-apiRouter.use('/readings', authenticateOrApiKey, readingRoutes);
-apiRouter.use('/energy', authenticateOrApiKey, energyRoutes);
-apiRouter.use('/reports', authenticateOrApiKey, reportRoutes);
-
-// Routes admin (JWT uniquement)
-apiRouter.use('/alerts', authenticate, alertRoutes);
-apiRouter.use('/automations', authenticate, automationRoutes);
-apiRouter.use('/api-keys', authenticate, apiKeyRoutes);
-apiRouter.use('/api-logs', authenticate, apiLogRoutes);
-apiRouter.use('/users', authenticate, userRoutes);
-apiRouter.use('/tenants', authenticate, tenantRoutes);
-apiRouter.use('/public', apiKeyAuth, (req, res) => { res.json({ message: 'API key validated', tenantId: (req as any).user?.tenantId }); });
-apiRouter.use('/admin', authenticate, adminRoutes);
-
-app.use('/api/v1', apiRouter);
-
-app.use(errorHandler);
 
 const buildingIdSchema = z.string().uuid();
 const joinError = 'Impossible de rejoindre ce bâtiment';
