@@ -1,3 +1,4 @@
+import { Prisma, type ZoneType } from '@prisma/client';
 import { prisma } from '../utils/database';
 import { NotFoundError } from '../utils/errors';
 
@@ -15,7 +16,7 @@ interface BuildingCreateData {
   address?: string;
   city?: string;
   unitsCount?: number;
-  config?: any;
+  config?: Prisma.InputJsonValue;
 }
 
 interface BuildingUpdateData {
@@ -23,14 +24,14 @@ interface BuildingUpdateData {
   address?: string;
   city?: string;
   unitsCount?: number;
-  config?: any;
+  config?: Prisma.InputJsonValue;
   isActive?: boolean;
 }
 
 interface ZoneCreateData {
   name: string;
   floor?: number;
-  type?: string;
+  type?: ZoneType;
 }
 
 export default {
@@ -99,16 +100,21 @@ export default {
 
   async createZone(buildingId: string, data: ZoneCreateData, tenantId: string) {
     if (!data.name) throw new Error('Zone name is required');
-    // Le champ 'type' est un string, Prisma acceptera une valeur correspondant à l'enum ZoneType
-    const zoneType = data.type || 'ROOM';
-    return prisma.zone.create({
-      data: {
-        name: data.name,
-        buildingId,
-        tenantId,
-        floor: data.floor || 0,
-        type: zoneType as any,
-      },
-    });
+    try {
+      return await prisma.zone.create({
+        data: {
+          name: data.name,
+          building: { connect: { id: buildingId, tenantId } },
+          tenantId,
+          floor: data.floor ?? 0,
+          type: data.type ?? 'ROOM',
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        throw new NotFoundError('Bâtiment introuvable');
+      }
+      throw error;
+    }
   },
 };
