@@ -1,0 +1,730 @@
+diff --git a/.env.example b/.env.example
+index 0412bcb..78871e8 100644
+--- a/.env.example
++++ b/.env.example
+@@ -51,3 +51,7 @@ ENERGY_COST_PER_KWH=0.12
+ # En production, le seed REFUSE de s'exécuter si cette variable est absente
+ # ou vaut CHANGE_ME. Le compte de démo ne doit jamais exister en production.
+ SEED_ADMIN_PASSWORD=CHANGE_ME
++
++# Contrôle électrique désactivé par défaut. Ne pas activer en production sans tests matériels.
++AFRIXORA_DEVICE_CONTROL_ENABLED=false
++AFRIXORA_AUTOMATION_COMMANDS_ENABLED=false
+diff --git a/backend/prisma/migrations/20261121000100_device_command_journal/migration.sql b/backend/prisma/migrations/20261121000100_device_command_journal/migration.sql
+new file mode 100644
+index 0000000..93eeab0
+--- /dev/null
++++ b/backend/prisma/migrations/20261121000100_device_command_journal/migration.sql
+@@ -0,0 +1,30 @@
++-- Additive migration for AFR-V2-001; apply on staging after a database backup.
++CREATE TYPE "DeviceCommandStatus" AS ENUM ('PENDING', 'SENT', 'ACKNOWLEDGED', 'CONFIRMED', 'FAILED', 'EXPIRED', 'REJECTED');
++
++CREATE TABLE "DeviceCommand" (
++    "id" TEXT NOT NULL,
++    "tenantId" TEXT NOT NULL,
++    "buildingId" TEXT NOT NULL,
++    "deviceId" TEXT NOT NULL,
++    "command" TEXT NOT NULL,
++    "params" JSONB NOT NULL DEFAULT '{}',
++    "origin" TEXT NOT NULL DEFAULT 'MANUAL',
++    "requestedByUserId" TEXT,
++    "status" "DeviceCommandStatus" NOT NULL DEFAULT 'PENDING',
++    "expiresAt" TIMESTAMP(3) NOT NULL,
++    "sentAt" TIMESTAMP(3),
++    "acknowledgedAt" TIMESTAMP(3),
++    "confirmedAt" TIMESTAMP(3),
++    "failedAt" TIMESTAMP(3),
++    "observedState" JSONB,
++    "error" TEXT,
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    CONSTRAINT "DeviceCommand_pkey" PRIMARY KEY ("id")
++);
++
++CREATE INDEX "DeviceCommand_tenantId_deviceId_createdAt_idx"
++  ON "DeviceCommand"("tenantId", "deviceId", "createdAt" DESC);
++CREATE INDEX "DeviceCommand_status_expiresAt_idx"
++  ON "DeviceCommand"("status", "expiresAt");
++ALTER TABLE "DeviceCommand" ADD CONSTRAINT "DeviceCommand_deviceId_fkey"
++  FOREIGN KEY ("deviceId") REFERENCES "Device"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+diff --git a/backend/prisma/schema.prisma b/backend/prisma/schema.prisma
+index 457d852..4fd6e6e 100644
+--- a/backend/prisma/schema.prisma
++++ b/backend/prisma/schema.prisma
+@@ -29,6 +29,16 @@ enum SubscriptionStatus {
+   TRIAL
+ }
+ 
++enum DeviceCommandStatus {
++  PENDING
++  SENT
++  ACKNOWLEDGED
++  CONFIRMED
++  FAILED
++  EXPIRED
++  REJECTED
++}
++
+ enum DeviceType {
+   LIGHT
+   PLUG
+@@ -147,6 +157,7 @@ model Device {
+   building   Building      @relation(fields: [buildingId], references: [id])
+   zone       Zone?         @relation(fields: [zoneId], references: [id])
+   states     DeviceState[]
++  commands   DeviceCommand[]
+   alerts     Alert[]
+ 
+   @@index([tenantId, buildingId])
+@@ -162,6 +173,31 @@ model DeviceState {
+   device    Device   @relation(fields: [deviceId], references: [id])
+ }
+ 
++// Command journal: broker delivery != execution. Device acknowledgments are separate events.
++model DeviceCommand {
++  id                String              @id @default(uuid())
++  tenantId          String
++  buildingId        String
++  deviceId          String
++  command           String
++  params            Json                @default("{}")
++  origin            String              @default("MANUAL")
++  requestedByUserId String?
++  status            DeviceCommandStatus @default(PENDING)
++  expiresAt         DateTime
++  sentAt            DateTime?
++  acknowledgedAt    DateTime?
++  confirmedAt       DateTime?
++  failedAt          DateTime?
++  observedState     Json?
++  error             String?
++  createdAt         DateTime            @default(now())
++  device            Device              @relation(fields: [deviceId], references: [id])
++
++  @@index([tenantId, deviceId, createdAt(sort: Desc)])
++  @@index([status, expiresAt])
++}
++
+ model Automation {
+   id          String    @id @default(uuid())
+   tenantId    String
+diff --git a/backend/src/app.ts b/backend/src/app.ts
+index e3b8bcf..d8b65df 100644
+--- a/backend/src/app.ts
++++ b/backend/src/app.ts
+@@ -22,6 +22,7 @@ import { requestLogger } from './middleware/requestLogger';
+ import { authenticate } from './middleware/authenticate';
+ import { authenticateOrApiKey } from './middleware/authenticateOrApiKey';
+ import { apiKeyAuth } from './middleware/apiKeyAuth';
++import { enforceOrigin } from './middleware/enforceOrigin';
+ 
+ export function createApp(trustProxyHops: number) {
+   const app = express();
+@@ -34,6 +35,7 @@ export function createApp(trustProxyHops: number) {
+   }));
+   app.use(express.json());
+   app.use(cookieParser());
++  app.use(enforceOrigin);
+ 
+   app.get('/health', (_req, res) => {
+     res.json({ status: 'ok' });
+diff --git a/backend/src/middleware/enforceOrigin.ts b/backend/src/middleware/enforceOrigin.ts
+new file mode 100644
+index 0000000..bdc7e6f
+--- /dev/null
++++ b/backend/src/middleware/enforceOrigin.ts
+@@ -0,0 +1,23 @@
++import type { Request, Response, NextFunction } from 'express';
++const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
++
++// Cookie-authenticated state changes must come from a configured browser origin.
++// Non-browser API clients using Authorization remain supported.
++export function enforceOrigin(req: Request, res: Response, next: NextFunction): void {
++  if (SAFE_METHODS.has(req.method)) return next();
++  const origin = req.headers.origin;
++  const allowed = (process.env.CORS_ORIGINS || 'http://localhost:3000')
++    .split(',').map(x => x.trim()).filter(Boolean);
++  if (origin && !allowed.includes(origin)) {
++    res.status(403).json({ error: 'Origin not allowed' });
++    return;
++  }
++  const cookiesPresent = Boolean(req.cookies?.access_token || req.cookies?.refresh_token);
++  const bearer = req.headers.authorization?.startsWith('Bearer ');
++  // Origin absent + cookie session: reject possible cross-site state changes.
++  if (cookiesPresent && !bearer && !origin) {
++    res.status(403).json({ error: 'Origin required for cookie authentication' });
++    return;
++  }
++  next();
++}
+diff --git a/backend/src/middleware/socketAuth.ts b/backend/src/middleware/socketAuth.ts
+index f3718c4..2f87cfa 100644
+--- a/backend/src/middleware/socketAuth.ts
++++ b/backend/src/middleware/socketAuth.ts
+@@ -26,6 +26,9 @@ function readAccessCookie(header: string | undefined): string | undefined {
+ 
+ export async function socketAuth(socket: AuthSocket, next: (error?: Error) => void): Promise<void> {
+   try {
++    const origin = socket.handshake.headers.origin;
++    const origins = (process.env.CORS_ORIGINS || 'http://localhost:3000').split(',').map(v => v.trim());
++    if (origin && !origins.includes(origin)) return next(new Error('Origin not allowed'));
+     const cookie = readAccessCookie(socket.handshake.headers.cookie);
+     const fallback: unknown = socket.handshake.auth.token;
+     const token = cookie ?? fallback;
+diff --git a/backend/src/routes/auth.ts b/backend/src/routes/auth.ts
+index c4149af..4758573 100644
+--- a/backend/src/routes/auth.ts
++++ b/backend/src/routes/auth.ts
+@@ -70,7 +70,7 @@ router.post('/login', loginLimiter, validate(loginSchema), async (req, res, next
+     // Renvoyer l'utilisateur ET le token (cookie httpOnly + fallback localStorage pour dev cross-port)
+     return res.json({
+       user: result.user,
+-      accessToken: result.accessToken,
++      ...(process.env.NODE_ENV === 'development' ? { accessToken: result.accessToken } : {}),
+     });
+   } catch (error) {
+     return next(error);
+diff --git a/backend/src/routes/devices.ts b/backend/src/routes/devices.ts
+index db215ed..f61e704 100644
+--- a/backend/src/routes/devices.ts
++++ b/backend/src/routes/devices.ts
+@@ -41,8 +41,8 @@ const updateDeviceSchema = z.object({
+ 
+ const controlDeviceSchema = z.object({
+   body: z.object({
+-    command: z.string().min(1),
+-    params: z.record(z.unknown()).optional(),
++    command: z.literal('set_state'),
++    params: z.object({ state: z.enum(['on', 'off']) }).strict(),
+   }),
+ });
+ 
+@@ -122,14 +122,21 @@ router.post(
+   validate(controlDeviceSchema),
+   async (req: Request, res: Response, next: NextFunction) => {
+     try {
+-      const result = await deviceService.control(req.params.id, { command: req.body.command, params: req.body.params }, req.user!.tenantId);
+-      return res.json(result);
++      const result = await deviceService.control(req.params.id, { command: req.body.command, params: req.body.params }, req.user!.tenantId, { requestedByUserId: req.user!.userId });
++      return res.status(202).json(result);
+     } catch (error) {
+       return next(error);
+     }
+   }
+ );
+ 
++router.get('/:id/commands/:commandId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
++  try {
++    const result = await deviceService.getCommand(req.params.id, req.params.commandId, req.user!.tenantId);
++    return res.json(result);
++  } catch (error) { return next(error); }
++});
++
+ router.get('/:id/history', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+   try {
+     const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 100;
+diff --git a/backend/src/services/automationEngine.ts b/backend/src/services/automationEngine.ts
+index 4bae22c..e5ded4f 100644
+--- a/backend/src/services/automationEngine.ts
++++ b/backend/src/services/automationEngine.ts
+@@ -1,7 +1,7 @@
+ import { Server } from 'socket.io';
+ import { prisma } from '../utils/database';
+ import type { CreateAutomationInput } from '../utils/automationSchemas';
+-import { publishMqtt } from './mqttWorker';
++import deviceService from './deviceService';
+ import logger from '../utils/logger';
+ 
+ /**
+@@ -93,16 +93,26 @@ export const evaluate = async (
+           const action = rule.action as CreateAutomationInput['action'];
+           
+           if (action.type === 'DEVICE_COMMAND') {
+-            // Send command to device via MQTT
+-            await publishMqtt(
+-              `afrixora/${tenantId}/${buildingId}/devices/${action.deviceId}/commands`,
+-              { command: action.command, params: action.params }
+-            );
+-            
+-            logger.debug(`Published MQTT command for device ${action.deviceId}`, {
+-              command: action.command,
+-              params: action.params
++            if (process.env.AFRIXORA_AUTOMATION_COMMANDS_ENABLED !== 'true') {
++              logger.warn('Automated physical commands disabled', { ruleId: rule.id });
++              continue;
++            }
++            const params: unknown = action.params;
++            const state = params && typeof params === 'object' && !Array.isArray(params)
++              ? (params as Record<string, unknown>).state : undefined;
++            if (action.command !== 'set_state' || (state !== 'on' && state !== 'off')) {
++              logger.warn('Automation command payload rejected', { ruleId: rule.id });
++              continue;
++            }
++            const target = await prisma.device.findFirst({
++              where: { id: action.deviceId, tenantId, buildingId }, select: { id: true },
+             });
++            if (!target) {
++              logger.warn('Automation target outside building/tenant', { ruleId: rule.id });
++              continue;
++            }
++            await deviceService.control(action.deviceId,
++              { command: 'set_state', params: { state } }, tenantId, { origin: 'AUTOMATION' });
+           } 
+           else if (action.type === 'SEND_ALERT') {
+             // Create alert in database
+diff --git a/backend/src/services/deviceService.ts b/backend/src/services/deviceService.ts
+index 7ca487b..be0cd46 100644
+--- a/backend/src/services/deviceService.ts
++++ b/backend/src/services/deviceService.ts
+@@ -1,7 +1,7 @@
+ import type { DeviceType, Prisma, Protocol } from '@prisma/client';
+ import { prisma } from '../utils/database';
+ import { publishMqtt } from './mqttWorker';
+-import { NotFoundError } from '../utils/errors';
++import { AppError, NotFoundError } from '../utils/errors';
+ 
+ export interface DeviceFilters {
+   buildingId?: string;
+@@ -152,25 +152,76 @@ export default {
+     if (!device) {
+       throw new NotFoundError('Device not found');
+     }
++    if (await prisma.deviceCommand.count({ where: { deviceId: id, tenantId } })) {
++      throw new AppError('Device with command history cannot be deleted without archival', 409, 'DEVICE_AUDIT_HISTORY');
++    }
+     await prisma.device.delete({ where: { ...relationsDuTenant(tenantId), id, tenantId } });
+   },
+ 
+-  async control(id: string, command: { command: string; params?: Record<string, unknown> }, tenantId: string) {
+-    const device = await prisma.device.findFirst({ where: { ...relationsDuTenant(tenantId), id, tenantId } });
+-    if (!device) {
+-      throw new NotFoundError('Device not found');
++  // Command acceptance is not physical execution; only device events can confirm a state.
++  async control(
++    id: string,
++    command: { command: 'set_state'; params: { state: 'on' | 'off' } },
++    tenantId: string,
++    context: { origin?: 'MANUAL' | 'AUTOMATION'; requestedByUserId?: string } = {}
++  ) {
++    if (process.env.AFRIXORA_DEVICE_CONTROL_ENABLED !== 'true') {
++      throw new AppError('Pilotage physique désactivé en attente de validation', 503, 'CONTROL_DISABLED');
+     }
++    const device = await prisma.device.findFirst({
++      where: { ...relationsDuTenant(tenantId), id, tenantId },
++    });
++    if (!device) throw new NotFoundError('Device not found');
++    if (!device.isOnline) throw new AppError('Device offline', 409, 'DEVICE_OFFLINE');
++    if (command.command !== 'set_state' || !['on', 'off'].includes(command.params?.state)) {
++      throw new AppError('Unsupported command', 400, 'INVALID_COMMAND');
++    }
++    const expiresAt = new Date(Date.now() + 30_000);
++    const journal = await prisma.deviceCommand.create({
++      data: {
++        tenantId, buildingId: device.buildingId, deviceId: id,
++        command: command.command, params: command.params,
++        origin: context.origin ?? 'MANUAL', requestedByUserId: context.requestedByUserId,
++        expiresAt, status: 'PENDING',
++      },
++    });
+     const topic = `afrixora/${tenantId}/${device.buildingId}/devices/${id}/commands`;
+-    await publishMqtt(topic, command);
+-    if (command.params?.state) {
+-      const state = command.params.state === 'on';
+-      await prisma.deviceState.upsert({
+-        where: { deviceId: id, tenantId },
+-        update: { state: { ...(device.config as object || {}), state: state ? 'on' : 'off' } },
+-        create: { deviceId: id, tenantId, state: { state: state ? 'on' : 'off' } },
++    try {
++      await publishMqtt(topic, {
++        commandId: journal.id, command: command.command,
++        params: command.params, expiresAt: expiresAt.toISOString(),
++      });
++    } catch {
++      await prisma.deviceCommand.updateMany({
++        where: { id: journal.id, status: 'PENDING' },
++        data: { status: 'FAILED', failedAt: new Date(), error: 'MQTT publish failed' },
++      });
++      throw new AppError('MQTT broker unavailable', 503, 'MQTT_UNAVAILABLE');
++    }
++    await prisma.deviceCommand.updateMany({
++      where: { id: journal.id, status: 'PENDING' },
++      data: { status: 'SENT', sentAt: new Date() },
++    });
++    return { accepted: true, commandId: journal.id, status: 'SENT', expiresAt };
++  },
++
++  async getCommand(deviceId: string, commandId: string, tenantId: string) {
++    const device = await prisma.device.findFirst({
++      where: { ...relationsDuTenant(tenantId), id: deviceId, tenantId }, select: { id: true },
++    });
++    if (!device) throw new NotFoundError('Device not found');
++    const command = await prisma.deviceCommand.findFirst({
++      where: { id: commandId, deviceId, tenantId },
++    });
++    if (!command) throw new NotFoundError('Command not found');
++    if (['PENDING', 'SENT', 'ACKNOWLEDGED'].includes(command.status) && command.expiresAt < new Date()) {
++      await prisma.deviceCommand.updateMany({
++        where: { id: command.id, status: { in: ['PENDING', 'SENT', 'ACKNOWLEDGED'] } },
++        data: { status: 'EXPIRED' },
+       });
++      return prisma.deviceCommand.findFirst({ where: { id: command.id, deviceId, tenantId } });
+     }
+-    return { success: true };
++    return command;
+   },
+ 
+   async getHistory(id: string, tenantId: string, limit = 100) {
+diff --git a/backend/src/services/mqttWorker.ts b/backend/src/services/mqttWorker.ts
+index fa89689..e603928 100644
+--- a/backend/src/services/mqttWorker.ts
++++ b/backend/src/services/mqttWorker.ts
+@@ -385,6 +385,7 @@ export const connectMQTT = (io: Server): void => {
+         if (kind === 'readings') {
+           await handleDeviceReadings(scope, payloadData, receivedAt, io);
+         } else if (await markDeviceSeen(scope)) {
++          await handleCommandAck(scope, payloadData, io);
+           io.to(`building:${buildingId}`).emit('device:event', { ...payloadData, deviceId: id });
+         }
+       } else {
+@@ -407,6 +408,49 @@ export const connectMQTT = (io: Server): void => {
+   setInterval(retryBuffer, RETRY_INTERVAL_MS);
+ };
+ 
++/** A device ACK is a reported state, not proof of a physical safety contactor position. */
++async function handleCommandAck(scope: DeviceScope, event: Record<string, unknown>, io: Server): Promise<void> {
++  if (event.type !== 'command_ack') return;
++  const commandId = event.commandId;
++  const status = event.status;
++  if (typeof commandId !== 'string' || !z.string().uuid().safeParse(commandId).success ||
++      !['ACKNOWLEDGED', 'CONFIRMED', 'FAILED'].includes(String(status))) return;
++  const observed = event.observedState;
++  if (status === 'CONFIRMED' && (!isRecord(observed) || !['on', 'off'].includes(String(observed.state)))) return;
++  const current = await prisma.deviceCommand.findFirst({
++    where: {
++      id: commandId, tenantId: scope.tenantId, buildingId: scope.buildingId,
++      deviceId: scope.deviceId, expiresAt: { gt: new Date() },
++      status: { in: ['PENDING', 'SENT', 'ACKNOWLEDGED'] },
++    },
++  });
++  if (!current) return;
++  // Never accept confirmation of a different state than the command requested.
++  if (status === 'CONFIRMED' && isRecord(current.params) && current.params.state !== (observed as Record<string, unknown>).state) return;
++  if (status === 'ACKNOWLEDGED' && current.status === 'ACKNOWLEDGED') return;
++  const updated = await prisma.deviceCommand.updateMany({
++    where: { id: current.id, expiresAt: { gt: new Date() },
++      status: { in: status === 'ACKNOWLEDGED' ? ['PENDING', 'SENT'] : ['PENDING', 'SENT', 'ACKNOWLEDGED'] } },
++    data: {
++      status: status as 'ACKNOWLEDGED' | 'CONFIRMED' | 'FAILED',
++      ...(status === 'ACKNOWLEDGED' ? { acknowledgedAt: new Date() } : {}),
++      ...(status === 'CONFIRMED' ? { confirmedAt: new Date(), observedState: { state: (observed as { state: string }).state } } : {}),
++      ...(status === 'FAILED' ? { failedAt: new Date(), error: 'Device reported failure' } : {}),
++    },
++  });
++  if (!updated.count) return;
++  if (status === 'CONFIRMED') {
++    await prisma.deviceState.upsert({
++      where: { deviceId: scope.deviceId },
++      update: { tenantId: scope.tenantId, state: { state: (observed as { state: string }).state } },
++      create: { deviceId: scope.deviceId, tenantId: scope.tenantId, state: { state: (observed as { state: string }).state } },
++    });
++  }
++  io.to(`building:${scope.buildingId}`).emit('device:command', {
++    deviceId: scope.deviceId, commandId, status,
++  });
++}
++
+ async function markDeviceSeen(scope: DeviceScope): Promise<boolean> {
+   const result = await prisma.device.updateMany({
+     where: deviceWhere(scope),
+diff --git a/backend/src/services/tenantService.ts b/backend/src/services/tenantService.ts
+index a954699..7191f95 100644
+--- a/backend/src/services/tenantService.ts
++++ b/backend/src/services/tenantService.ts
+@@ -66,6 +66,7 @@ export async function deleteTenantPermanently(id: string): Promise<void> {
+     await tx.automation.deleteMany({ where });
+     await tx.gateway.deleteMany({ where });
+     await tx.deviceState.deleteMany({ where });
++    await tx.deviceCommand.deleteMany({ where });
+     await tx.device.deleteMany({ where });
+     await tx.zone.deleteMany({ where });
+     await tx.building.deleteMany({ where });
+diff --git a/backend/tests/v2_p0_isolated.test.cjs b/backend/tests/v2_p0_isolated.test.cjs
+new file mode 100644
+index 0000000..9396341
+--- /dev/null
++++ b/backend/tests/v2_p0_isolated.test.cjs
+@@ -0,0 +1,64 @@
++const {test}=require('node:test');
++const assert=require('node:assert/strict');
++const fs=require('node:fs');
++const vm=require('node:vm');
++const path=require('node:path');
++const ts=require('typescript');
++const src=path.join(__dirname,'..','src');
++const logger={info(){},debug(){},warn(){},error(){}};
++function load(file,deps,env={}) {
++  const js=ts.transpileModule(fs.readFileSync(path.join(src,file),'utf8'), {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,esModuleInterop:true}}).outputText;
++  const mod={exports:{}};
++  vm.runInNewContext(js,{exports:mod.exports,module:mod,require:id=>{if(id in deps)return deps[id];throw Error('Mock required '+id);},process:{env},Buffer,Date,Promise,setInterval(){},setTimeout,console});
++  return mod.exports;
++}
++function setupService(env,publish=async()=>{}) {
++  const events=[];
++  const prisma={device:{findFirst:async()=>({id:'device',buildingId:'building',tenantId:'tenant',isOnline:true})},
++    deviceState:{upsert(){throw Error('State cannot be modified before confirmation')}},
++    deviceCommand:{create:async()=>{events.push('PENDING');return{id:'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'};},
++      updateMany:async({data})=>{events.push(data.status);return{count:1}}}};
++  class AppError extends Error {constructor(message,status,code){super(message);this.code=code;}}
++  const service=load('services/deviceService.ts',{'../utils/database':{prisma},'./mqttWorker':{publishMqtt:async(...args)=>{events.push('PUBLISH');await publish(...args)}},'../utils/errors':{AppError,NotFoundError:Error}},env).default;
++  return{service,events};
++}
++test('Pilot controls stay disabled by default',async()=>{
++  const {service}=setupService({});
++  await assert.rejects(service.control('device',{command:'set_state',params:{state:'off'}},'tenant'),{code:'CONTROL_DISABLED'});
++});
++test('Publishing a command leaves physical state unknown',async()=>{
++  const {service,events}=setupService({AFRIXORA_DEVICE_CONTROL_ENABLED:'true'});
++  const answer=await service.control('device',{command:'set_state',params:{state:'off'}},'tenant');
++  assert.equal(answer.accepted,true);assert.equal(answer.status,'SENT');
++  assert.deepEqual(events,['PENDING','PUBLISH','SENT']);
++});
++test('MQTT publication failure records FAILED',async()=>{
++  const {service,events}=setupService({AFRIXORA_DEVICE_CONTROL_ENABLED:'true'},async()=>{throw Error('down')});
++  await assert.rejects(service.control('device',{command:'set_state',params:{state:'on'}},'tenant'),{code:'MQTT_UNAVAILABLE'});
++  assert.deepEqual(events,['PENDING','PUBLISH','FAILED']);
++});
++test('ACK events do not overwrite reported state until matching CONFIRMED event',async()=>{
++  const handlers={},actions=[];
++  const id='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
++  let currentStatus='SENT';
++  const zschema=()=>{const sch=new Proxy({}, {get(_target,key){if(key==='safeParse')return value=>({success: typeof value==='string' ? true : !!value,data:value});return()=>sch;}});return sch;};
++  const z=new Proxy({},{get(_t,k){return()=>zschema();}});
++  const prisma={device:{findFirst:async()=>({id:'device'}),updateMany:async()=>({count:1})},
++    deviceCommand:{findFirst:async()=>({id,status:currentStatus,params:{state:'on'}}),updateMany:async({data})=>{actions.push(data.status);currentStatus=data.status;return{count:1};}},
++    deviceState:{upsert:async()=>{actions.push('DEVICE_STATE')}}};
++  const mqtt={connect:()=>({connected:true,on:(name,fn)=>{handlers[name]=fn;},subscribe(){}})};
++  const {connectMQTT}=load('services/mqttWorker.ts',{
++    'node:crypto':{randomUUID:()=>id},zod:{z},mqtt,
++    '../utils/logger':logger,'../utils/database':{prisma,query:async()=>{}},
++    '../utils/redis':{getRedisClient:()=>({}) ,isRedisConnected:()=>false},
++    './automationEngine':{evaluate:async()=>{}}},{});
++  const io={to:()=>({emit(){}})}; connectMQTT(io);
++  const topic='afrixora/tenant/building/devices/device/events';
++  const event=(status,state)=>Buffer.from(JSON.stringify({type:'command_ack',commandId:id,status,...(state?{observedState:{state}}:{})}));
++  await handlers.message(topic,event('ACKNOWLEDGED'));
++  assert.deepEqual(actions,['ACKNOWLEDGED']);
++  await handlers.message(topic,event('CONFIRMED','off'));
++  assert.deepEqual(actions,['ACKNOWLEDGED']);
++  await handlers.message(topic,event('CONFIRMED','on'));
++  assert.deepEqual(actions,['ACKNOWLEDGED','CONFIRMED','DEVICE_STATE']);
++});
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 3f6e782..cd36d07 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -87,6 +87,8 @@ services:
+       - MQTT_URL=mqtt://mosquitto:1883
+       - MQTT_API_USER=${MQTT_API_USER}
+       - MQTT_API_PASSWORD=${MQTT_API_PASSWORD}
++      - AFRIXORA_DEVICE_CONTROL_ENABLED=${AFRIXORA_DEVICE_CONTROL_ENABLED:-false}
++      - AFRIXORA_AUTOMATION_COMMANDS_ENABLED=${AFRIXORA_AUTOMATION_COMMANDS_ENABLED:-false}
+       - RESEND_API_KEY=${RESEND_API_KEY}
+       - DOMAIN=${DOMAIN}
+       - CORS_ORIGINS=${CORS_ORIGINS}
+@@ -114,6 +116,7 @@ services:
+       context: ./frontend
+       args:
+         NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://api.${DOMAIN}}"
++        NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED: "${NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED:-false}"
+     restart: unless-stopped
+     deploy:
+       resources:
+diff --git a/docs/AFRIXORA_P0_V2_INTEGRATION.md b/docs/AFRIXORA_P0_V2_INTEGRATION.md
+new file mode 100644
+index 0000000..d9ffab8
+--- /dev/null
++++ b/docs/AFRIXORA_P0_V2_INTEGRATION.md
+@@ -0,0 +1,33 @@
++# AFRIXORA — Intégration P0 + V2-001 (candidate non déployée)
++
++Base retenue : archive `afrixora-platform-fix-audit-p0.zip`.
++
++## Ajouts conservatoires
++- Conserve les routes, protections multi-tenant, CI, ACL et buffer Redis du lot P0.
++- Étend Prisma avec `DeviceCommand` + migration additive (à tester sur une base isolée).
++- Ne modifie plus `DeviceState` après publication MQTT ; attend un événement `command_ack`.
++- Ajoute un endpoint de suivi `GET /api/v1/devices/:id/commands/:commandId`.
++- Rejette les accusés périmés, associés au mauvais appareil ou d'état différent.
++- L'automatisation utilise le même chemin de commande journalisé, contrôlé par deux feature flags.
++- Supprime la confirmation optimiste dans la page de gestion des appareils.
++- Ajoute une protection Origin pour les requêtes mutantes authentifiées par cookie et pour les sockets.
++- Ne renvoie plus `accessToken` dans la réponse login en production.
++- Adapte la suppression permanente d'un tenant au nouveau journal de commandes.
++
++## Validation requise
++1. Sauvegarder la base et créer un environnement de test complètement isolé.
++2. `cd backend && npm ci && npx prisma validate && npx prisma generate && npm run typecheck && npm test`.
++3. `cd frontend && npm ci && npm run typecheck && npm run build`.
++4. Valider sur PostgreSQL de test `npx prisma migrate deploy` et le rollback de la sauvegarde.
++5. Tester avec Mosquitto : ACL, appareil valide, usurpation de topic, ACK erroné, ACK tardif, ACK correct.
++6. Tester les permissions et les scénarios hors connexion, sans connexion à des contacteurs réels.
++7. Garder `AFRIXORA_DEVICE_CONTROL_ENABLED=false`, `AFRIXORA_AUTOMATION_COMMANDS_ENABLED=false`, `NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED=false`.
++
++## Limites connues
++- Un ACK MQTT signé par le compte du périphérique reste une **déclaration logicielle**, pas une preuve physique.
++- Pas de compilation intégrée ni de tests matériels garantis ici.
++- La branche P0 conserve des configurations de développement à durcir avant toute production.
++- Les commandes sont toujours hors service par défaut, quel que soit le bouton frontend.
++
++- Vérifier l’ACL Mosquitto par passerelle ; la présence d’un fichier ACL ne garantit pas que les identifiants de chaque boîtier soient isolés.
++- Supprimer physiquement un appareil doté d’un historique de commande retourne 409 ; prévoir un archivage.
+diff --git a/frontend/.env.example b/frontend/.env.example
+index 6146788..515d29f 100644
+--- a/frontend/.env.example
++++ b/frontend/.env.example
+@@ -6,4 +6,6 @@ NEXT_PUBLIC_APP_NAME=AFRIXORA™
+ NEXT_PUBLIC_APP_DESCRIPTION=Global IoT Intelligence Platform
+ 
+ # Authentication
+-NEXT_PUBLIC_AUTH_TOKEN_KEY=afrixora_access_token
+\ No newline at end of file
++NEXT_PUBLIC_AUTH_TOKEN_KEY=afrixora_access_token
++# Affichage des commandes pilotes (ne protège pas le backend)
++NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED=false
+diff --git a/frontend/Dockerfile b/frontend/Dockerfile
+index 09d1741..302f0d3 100644
+--- a/frontend/Dockerfile
++++ b/frontend/Dockerfile
+@@ -25,6 +25,8 @@ ENV NEXT_TELEMETRY_DISABLED 1
+ ENV NODE_ENV production
+ ARG NEXT_PUBLIC_API_URL
+ ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
++ARG NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED=false
++ENV NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED=${NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED}
+ 
+ # Build the application
+ RUN npm run build
+diff --git a/frontend/src/app/(dashboard)/devices/page.tsx b/frontend/src/app/(dashboard)/devices/page.tsx
+index 60042f3..88a57fa 100644
+--- a/frontend/src/app/(dashboard)/devices/page.tsx
++++ b/frontend/src/app/(dashboard)/devices/page.tsx
+@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
+ import api from "@/lib/api";
+ import logger from "@/lib/logger";
+ import useStore from "@/store";
++import { toast } from "sonner";
+ import { usePaginatedList } from "@/hooks/usePaginatedList";
+ import type { Device, Building, PaginatedResponse, Zone } from "@/types";
+ import { Zap, Wifi, WifiOff, Power, PowerOff, Search, LayoutGrid, List, Plus, Eye, Cpu, Loader2 } from "lucide-react";
+@@ -136,10 +137,9 @@ const DevicesPage = () => {
+     usePaginatedList<Device>("/api/v1/devices", filters.toString());
+   const devices = result?.data ?? [];
+ 
+-  const updateDevice = useStore(state => state.updateDevice);
+   const user = useStore(state => state.user);
+   const canEdit = user && ['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN'].includes(user.role);
+-  const canControl = user && user.role !== 'VIEWER';
++  const canControl = Boolean(user && user.role !== 'VIEWER' && process.env.NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED === 'true');
+ 
+   useEffect(() => {
+     const controller = new AbortController();
+@@ -168,27 +168,26 @@ const DevicesPage = () => {
+   };
+ 
+   const toggleDevice = async (id: string, newState: boolean) => {
++    if (!canControl) return;
+     try {
+       await api.post(`/api/v1/devices/${id}/control`, {
+-        command: 'set_state',
+-        params: { state: newState ? 'on' : 'off' }
++        command: 'set_state', params: { state: newState ? 'on' : 'off' },
+       });
+-      updateItems(prev => prev.map(d => d.id === id ? { ...d, config: { ...d.config, state: newState ? 'on' : 'off' } } : d));
+-      updateDevice(id, { config: { state: newState ? 'on' : 'off' } } as any);
++      toast.info('Commande transmise. En attente de confirmation par l’appareil.');
++      // No optimistic state mutation: the broker ACK is not a physical measurement.
+     } catch (err) {
+       logger.error(String(err));
++      toast.error('Impossible de transmettre la commande.');
+     }
+   };
+ 
+   const bulkToggle = async (state: boolean) => {
+-    const cmd = state ? 'on' : 'off';
+-    await Promise.all(
+-      Array.from(selectedIds).map(id =>
+-        api.post(`/api/v1/devices/${id}/control`, { command: 'set_state', params: { state: cmd } })
+-      )
+-    );
+-    updateItems(prev => prev.map(d => selectedIds.has(d.id) ? { ...d, config: { ...d.config, state: cmd } } : d));
+-    selectedIds.forEach(id => updateDevice(id, { config: { state: cmd } } as any));
++    if (!canControl) return;
++    const responses = await Promise.allSettled(Array.from(selectedIds).map(id =>
++      api.post(`/api/v1/devices/${id}/control`, { command: 'set_state', params: { state: state ? 'on' : 'off' } })
++    ));
++    const accepted = responses.filter(r => r.status === 'fulfilled').length;
++    toast.info(`${accepted}/${responses.length} commandes acceptées ; exécution non encore confirmée.`);
+   };
+ 
+   const handleBuildingChange = (buildingId: string) => {
+@@ -197,11 +196,18 @@ const DevicesPage = () => {
+     setSelectedBuildingId(buildingId);
+   };
+ 
++  const reportedState = (device: Device): 'on' | 'off' | null => {
++    const value = device.states?.[0]?.state;
++    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
++    const state = (value as Record<string, unknown>).state;
++    return state === 'on' || state === 'off' ? state : null;
++  };
++
+   const stats = {
+     total: result?.total ?? 0,
+     online: devices.filter(d => d.isOnline).length,
+     offline: devices.filter(d => !d.isOnline).length,
+-    active: devices.filter(d => d.config?.state === 'on' || d.config?.power === 'on').length,
++    active: devices.filter(d => reportedState(d) === 'on').length,
+     power: "—",
+   };
+ 
+@@ -227,8 +233,8 @@ const DevicesPage = () => {
+         </div>
+         {selectedIds.size > 0 && (
+           <div className="flex gap-1">
+-            <Button variant="outline" size="sm" onClick={() => bulkToggle(true)}>Allumer</Button>
+-            <Button variant="outline" size="sm" onClick={() => bulkToggle(false)}>Éteindre</Button>
++            <Button variant="outline" size="sm" disabled={!canControl} onClick={() => bulkToggle(true)}>Allumer</Button>
++            <Button variant="outline" size="sm" disabled={!canControl} onClick={() => bulkToggle(false)}>Éteindre</Button>
+           </div>
+         )}
+         {/* CORRECTION : ajout de l'accolade fermante après </Button> */}
+@@ -285,7 +291,7 @@ const DevicesPage = () => {
+                   <td className="p-3"><Badge className={TYPE_BADGES[d.type] || ""}>{TYPE_LABELS[d.type] || d.type}</Badge></td>
+                   <td className="p-3 text-muted-foreground">{d.zone?.name || "—"}</td>
+                   <td className="p-3"><Badge variant={d.isOnline ? "default" : "destructive"} className="text-xs">{d.isOnline ? "En ligne" : "Hors ligne"}</Badge></td>
+-                  <td className="p-3"><Switch checked={d.config?.state === 'on' || d.config?.power === 'on'} onCheckedChange={checked => toggleDevice(d.id, checked)} onClick={e => e.stopPropagation()} /></td>
++                  <td className="p-3"><Switch checked={reportedState(d) === 'on'} disabled={!canControl || !d.isOnline} onCheckedChange={checked => toggleDevice(d.id, checked)} onClick={e => e.stopPropagation()} /></td>
+                   <td className="p-3">
+                     <div className="flex gap-1 opacity-0 hover:opacity-100 transition-opacity">
+                       <Button variant="ghost" size="icon" onClick={e => { e.stopPropagation(); setDrawerDevice(d); }}>⋯</Button>
+@@ -299,10 +305,10 @@ const DevicesPage = () => {
+       ) : (
+         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+           {devices.map(d => (
+-            <Card key={d.id} className={`p-4 cursor-pointer hover:shadow-md transition-shadow ${d.config?.state === "on" ? "border-emerald-500/30 bg-emerald-500/5" : ""}`} onClick={() => setDrawerDevice(d)}>
++            <Card key={d.id} className={`p-4 cursor-pointer hover:shadow-md transition-shadow ${reportedState(d) === "on" ? "border-emerald-500/30 bg-emerald-500/5" : ""}`} onClick={() => setDrawerDevice(d)}>
+               <div className="flex items-center justify-between mb-3">
+                 <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-500 font-bold text-xs">{d.type[0]}</div>
+-                <Switch checked={d.config?.state === 'on' || d.config?.power === 'on'} onCheckedChange={checked => toggleDevice(d.id, checked)} onClick={e => e.stopPropagation()} />
++                <Switch checked={reportedState(d) === 'on'} disabled={!canControl || !d.isOnline} onCheckedChange={checked => toggleDevice(d.id, checked)} onClick={e => e.stopPropagation()} />
+               </div>
+               <div className="font-medium truncate">{d.name}</div>
+               <div className="text-xs text-muted-foreground">{d.zone?.name || "—"} · {d.isOnline ? <span className="text-emerald-400">En ligne</span> : <span className="text-red-400">Hors ligne</span>}</div>
+@@ -327,7 +333,7 @@ const DevicesPage = () => {
+               <div><span className="text-muted-foreground">Zone</span> <span className="float-right">{drawerDevice.zone?.name || "—"}</span></div>
+               <div><span className="text-muted-foreground">Statut</span> <span className={`float-right ${drawerDevice.isOnline ? "text-emerald-400" : "text-red-400"}`}>{drawerDevice.isOnline ? "En ligne" : "Hors ligne"}</span></div>
+               <div><span className="text-muted-foreground">Protocole</span> <span className="float-right">{drawerDevice.protocol}</span></div>
+-              <div><span className="text-muted-foreground">État</span> <span className="float-right font-bold">{drawerDevice.config?.state === 'on' ? "Allumé" : "Éteint"}</span></div>
++              <div><span className="text-muted-foreground">État</span> <span className="float-right font-bold">{reportedState(drawerDevice) === 'on' ? "Allumé (signalé)" : reportedState(drawerDevice) === 'off' ? "Éteint (signalé)" : "État inconnu"}</span></div>
+               <div><span className="text-muted-foreground">ID</span> <span className="float-right text-xs font-mono">{drawerDevice.id}</span></div>
+             </div>
+           </div>
