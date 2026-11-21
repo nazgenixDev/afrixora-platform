@@ -1,6 +1,7 @@
 import { query } from '../utils/database';
 import PDFDocument from 'pdfkit';
 import { format } from 'date-fns';
+import { avgPowerSql, buildingDevicesSql, energySamplesSql, totalEnergySql } from './energyQueries';
 import logger from '../utils/logger';
 
 /**
@@ -14,15 +15,15 @@ export const generateCSV = async (
 ): Promise<string> => {
   try {
     const sql = `
+      WITH devices AS MATERIALIZED (${buildingDevicesSql})
       SELECT sr.time, sr.device_id, sr.metric, sr.value, sr.unit, d.name as device_name
       FROM sensor_readings sr
-      JOIN "Device" d ON sr.device_id = d.id::uuid
+      JOIN devices d ON sr.device_id = d.device_id
       WHERE sr.tenant_id = $1::uuid
-        AND sr.time BETWEEN $2::timestamptz AND $3::timestamptz
-        AND d."buildingId" = $4
+        AND sr.time BETWEEN $3::timestamptz AND $4::timestamptz
       ORDER BY sr.time ASC
     `;
-    const result = await query(sql, [tenantId, from.toISOString(), to.toISOString(), buildingId]);
+    const result = await query(sql, [tenantId, buildingId, from.toISOString(), to.toISOString()]);
 
     let csv = 'Timestamp,Device Name,Metric,Value,Unit\n';
     for (const row of result.rows) {
@@ -31,8 +32,8 @@ export const generateCSV = async (
     }
     logger.info('CSV report generated successfully', { tenantId, buildingId, rowCount: result.rows.length });
     return csv;
-  } catch (error: any) {
-    logger.error('Error generating CSV report', { error: error.message, tenantId, buildingId });
+  } catch (error) {
+    logger.error('Error generating CSV report', { error: error instanceof Error ? error.message : String(error), tenantId, buildingId });
     throw new Error('Failed to generate CSV report');
   }
 };
@@ -58,36 +59,32 @@ export const generatePDF = async (
     if (bRes.rows.length === 0) throw new Error('Building not found');
     const building = bRes.rows[0];
 
-    // 2. Get KPIs
-    const kpiSql = `
-      SELECT 
-        COALESCE(SUM(CASE WHEN sr.metric = 'energy_kwh' THEN sr.value ELSE 0 END), 0) as total_kwh,
-        COALESCE(MAX(CASE WHEN sr.metric = 'power_w' THEN sr.value ELSE NULL END), 0) as peak_w,
-        COALESCE(AVG(CASE WHEN sr.metric = 'power_w' THEN sr.value ELSE NULL END), 0) as avg_w
-      FROM sensor_readings sr
-      JOIN "Device" d ON sr.device_id = d.id::uuid
-      WHERE sr.tenant_id = $1::uuid
-        AND sr.time BETWEEN $2::timestamptz AND $3::timestamptz
-        AND d."buildingId" = $4
-    `;
-    const kpiRes = await query(kpiSql, [tenantId, from.toISOString(), to.toISOString(), buildingId]);
-    const kpis = kpiRes.rows[0];
+    const params = [tenantId, buildingId, from.toISOString(), to.toISOString()];
+    const samples = energySamplesSql('$3::timestamptz', '$4::timestamptz', period !== 'day');
 
-    // 3. Get device breakdown
-    const devSql = `
-      SELECT d.name as device_name, d.type as device_type,
-             COALESCE(SUM(sr.value), 0) as total_consumption
-      FROM sensor_readings sr
-      JOIN "Device" d ON sr.device_id = d.id::uuid
-      WHERE sr.tenant_id = $1::uuid
-        AND sr.time BETWEEN $2::timestamptz AND $3::timestamptz
-        AND d."buildingId" = $4
-        AND sr.metric = 'energy_kwh'
-      GROUP BY d.id, d.name, d.type
-      ORDER BY total_consumption DESC
-      LIMIT 10
-    `;
-    const devRes = await query(devSql, [tenantId, from.toISOString(), to.toISOString(), buildingId]);
+    const [kpiRes, devRes] = await Promise.all([
+      query(
+        `WITH ${samples}
+         SELECT ${totalEnergySql} AS total_kwh,
+                MAX(maximum) FILTER (WHERE metric = 'power_w') AS peak_w,
+                ${avgPowerSql} AS avg_w
+         FROM samples`,
+        params
+      ),
+      query(
+        `WITH ${samples}
+         SELECT d.name AS device_name, d.type AS device_type,
+                ${totalEnergySql} AS total_consumption
+         FROM samples s
+         JOIN devices d ON d.device_id = s.device_id
+         WHERE s.metric = 'energy_kwh'
+         GROUP BY d.id, d.name, d.type
+         ORDER BY total_consumption DESC
+         LIMIT 10`,
+        params
+      ),
+    ]);
+    const kpis = kpiRes.rows[0];
 
     // 4. Build PDF
     const doc = new PDFDocument({ margin: 50 });
@@ -153,8 +150,8 @@ export const generatePDF = async (
 
     logger.info('PDF report generated successfully', { tenantId, buildingId });
     return pdfBuffer;
-  } catch (error: any) {
-    logger.error('Error generating PDF report', { error: error.message, tenantId, buildingId });
+  } catch (error) {
+    logger.error('Error generating PDF report', { error: error instanceof Error ? error.message : String(error), tenantId, buildingId });
     throw new Error('Failed to generate PDF report');
   }
 };

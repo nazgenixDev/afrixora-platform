@@ -1,14 +1,26 @@
 import { Router } from 'express';
 import { prisma } from '../utils/database';
-import { SubscriptionPlan, SubscriptionStatus, Role } from '@prisma/client';
+import { SubscriptionPlan, SubscriptionStatus } from '@prisma/client';
 import { authenticate } from '../middleware/authenticate';
 import { authorize } from '../middleware/authorize';
 import { getPlanLimits } from '../utils/plans';
-import bcrypt from 'bcryptjs';
+import { createTenant, deleteTenantPermanently } from '../services/tenantService';
 import logger from '../utils/logger';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { Resend } from 'resend';
+import { NotFoundError } from '../utils/errors';
+
+const createTenantSchema = z.object({
+  body: z.object({
+    name: z.string().trim().min(1),
+    slug: z.string().regex(/^[a-z0-9-]{3,40}$/),
+    plan: z.nativeEnum(SubscriptionPlan),
+    adminEmail: z.string().email(),
+    adminName: z.string().trim().min(1),
+    adminPassword: z.string().min(8),
+  }).strict(),
+});
 
 const planSchema = z.object({
   body: z.object({
@@ -26,12 +38,23 @@ const upgradeRequestSchema = z.object({
   }),
 });
 
+const tenantActivitySchema = z.object({
+  body: z.object({ isActive: z.boolean() }).strict(),
+});
+
 const router = Router();
+
+async function setTenantActivity(id: string, isActive: boolean) {
+  const { count } = await prisma.tenant.updateMany({ where: { id }, data: { isActive } });
+  if (count === 0) throw new NotFoundError('Tenant introuvable');
+}
 
 // GET /tenants - list all tenants (super admin only)
 router.get('/', authenticate, authorize(['SUPER_ADMIN']), async (req, res, next) => {
   try {
-    const tenants = await prisma.tenant.findMany();
+    const tenants = await prisma.tenant.findMany({
+      include: { _count: { select: { buildings: true, users: true } } },
+    });
     res.json(tenants);
   } catch (error) {
     next(error);
@@ -39,50 +62,11 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN']), async (req, res, next)
 });
 
 // POST /tenants - create a new tenant with admin user (super admin only)
-router.post('/', authenticate, authorize(['SUPER_ADMIN']), async (req, res, next) => {
+router.post('/', authenticate, authorize(['SUPER_ADMIN']), validate(createTenantSchema), async (req, res, next) => {
   try {
-    const { name, slug, plan: frontendPlan = 'CORE', adminEmail, adminName, adminPassword } = req.body;
-    if (!name || !slug || !adminEmail || !adminName || !adminPassword) {
-      return res.status(400).json({ error: 'Missing required fields: name, slug, adminEmail, adminName, adminPassword' });
-    }
-
-    const planMap: Record<string, SubscriptionPlan> = {
-      'CORE': SubscriptionPlan.BASIC,
-      'COMFORT': SubscriptionPlan.PRO,
-      'ENTERPRISE': SubscriptionPlan.ENTERPRISE,
-    };
-    const dbPlan = planMap[frontendPlan] || SubscriptionPlan.BASIC;
-
-    const existingTenant = await prisma.tenant.findUnique({ where: { slug } });
-    if (existingTenant) return res.status(409).json({ error: 'Slug already exists' });
-    const existingUser = await prisma.user.findUnique({ where: { email: adminEmail } });
-    if (existingUser) return res.status(409).json({ error: 'Email already used' });
-
-    const passwordHash = await bcrypt.hash(adminPassword, 10);
-
-    const result = await prisma.$transaction(async (tx) => {
-      const tenant = await tx.tenant.create({
-        data: {
-          name,
-          slug,
-          plan: dbPlan,
-          subscriptionStatus: SubscriptionStatus.ACTIVE,
-        },
-      });
-      const user = await tx.user.create({
-        data: {
-          email: adminEmail,
-          passwordHash,
-          name: adminName,
-          role: 'TENANT_ADMIN',
-          tenantId: tenant.id,
-          isActive: true,
-        },
-      });
-      return { tenant, user };
-    });
-
-    res.status(201).json(result.tenant);
+    const body: z.infer<typeof createTenantSchema>['body'] = res.locals.validatedBody;
+    const tenant = await createTenant(body);
+    res.status(201).json(tenant);
   } catch (error) {
     next(error);
   }
@@ -91,7 +75,7 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN']), async (req, res, next
 // GET /tenants/current/subscription - current authenticated user's tenant subscription
 router.get('/current/subscription', authenticate, async (req, res, next) => {
   try {
-    const tenantId = (req as any).user.tenantId;
+    const tenantId = req.user!.tenantId;
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
     if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
 
@@ -124,7 +108,7 @@ router.get('/current/subscription', authenticate, async (req, res, next) => {
 // POST /tenants/current/upgrade-request - request plan change (tenant admin)
 router.post('/current/upgrade-request', authenticate, authorize(['TENANT_ADMIN']), validate(upgradeRequestSchema), async (req, res, next) => {
   try {
-    const tenantId = (req as any).user.tenantId;
+    const tenantId = req.user!.tenantId;
     const { requestedPlan } = req.body as { requestedPlan: 'BASIC' | 'PRO' | 'BUSINESS' | 'ENTERPRISE' };
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
     if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
@@ -136,7 +120,7 @@ router.post('/current/upgrade-request', authenticate, authorize(['TENANT_ADMIN']
 
     if (process.env.RESEND_API_KEY) {
       const resend = new Resend(process.env.RESEND_API_KEY);
-      const result = await resend.emails.send({
+      await resend.emails.send({
         from: 'AFRIXORA <onboarding@resend.dev>',
         to: superAdmin.email,
         subject: `Demande de changement de plan - ${tenant.name}`,
@@ -173,7 +157,7 @@ router.get('/:id/subscription', authenticate, authorize(['SUPER_ADMIN', 'TENANT_
     const tenant = await prisma.tenant.findUnique({ where: { id } });
     if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
 
-    const user = (req as any).user;
+    const user = req.user!;
     if (user.role === 'TENANT_ADMIN' && user.tenantId !== id) return res.status(403).json({ error: 'Forbidden' });
 
     const [deviceCount, automationCount] = await Promise.all([
@@ -231,20 +215,32 @@ router.patch('/:id/plan', authenticate, authorize(['SUPER_ADMIN']), validate(pla
   }
 });
 
-// DELETE /tenants/:id - delete a tenant (super admin only)
+// PATCH /tenants/:id — modifier le statut du tenant (super administrateur)
+router.patch('/:id', authenticate, authorize(['SUPER_ADMIN']), validate(tenantActivitySchema), async (req, res, next) => {
+  try {
+    const { isActive }: z.infer<typeof tenantActivitySchema>['body'] = res.locals.validatedBody;
+    await setTenantActivity(req.params.id, isActive);
+    res.json({ id: req.params.id, isActive });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// DELETE /tenants/:id — désactiver le tenant et conserver ses données
 router.delete('/:id', authenticate, authorize(['SUPER_ADMIN']), async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const tenant = await prisma.tenant.findUnique({ where: { id } });
-    if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
+    await setTenantActivity(req.params.id, false);
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+});
 
-    await prisma.$transaction([
-      prisma.user.deleteMany({ where: { tenantId: id } }),
-      prisma.apiKey.deleteMany({ where: { tenantId: id } }),
-      prisma.subscriptionHistory.deleteMany({ where: { tenantId: id } }),
-      prisma.building.deleteMany({ where: { tenantId: id } }),
-      prisma.tenant.delete({ where: { id } }),
-    ]);
+// DELETE /tenants/:id/permanent — supprimer définitivement le tenant
+router.delete('/:id/permanent', authenticate, authorize(['SUPER_ADMIN']), async (req, res, next) => {
+  try {
+    await deleteTenantPermanently(req.params.id);
+    logger.info('Tenant supprimé définitivement', { tenantId: req.params.id, userId: req.user!.userId });
     res.status(204).send();
   } catch (error) {
     next(error);

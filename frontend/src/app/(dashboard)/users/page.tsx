@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { isAxiosError } from "axios";
 import { Button } from "@/components/ui/button";
+import { PaginationControls } from "@/components/ui/pagination-controls";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -12,6 +14,7 @@ import api from "@/lib/api";
 import logger from "@/lib/logger";
 import useStore from "@/store";
 import ChangePasswordDialog from "@/components/users/ChangePasswordDialog";
+import { usePaginatedList } from "@/hooks/usePaginatedList";
 
 interface User {
   id: string;
@@ -32,8 +35,8 @@ const ROLES = [
 
 const UsersPage = (): JSX.Element => {
   const user = useStore(state => state.user);
-  const [users, setUsers] = useState<User[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { result, loading, error, setPage, reload, updateItems } = usePaginatedList<User>("/api/v1/users");
+  const users = result?.data ?? [];
   const [showAdd, setShowAdd] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [resetTarget, setResetTarget] = useState<User | null>(null);
@@ -45,23 +48,8 @@ const UsersPage = (): JSX.Element => {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [roleError, setRoleError] = useState<{ userId: string; message: string } | null>(null);
   const [form, setForm] = useState({ email: "", name: "", role: "TENANT_ADMIN", password: "" });
-
-  const fetchUsers = async () => {
-    try {
-      const res = await api.get("/api/v1/users");
-      const raw = res.data;
-      setUsers(Array.isArray(raw) ? raw : (raw?.data ?? []));
-    } catch (err) {
-      logger.error(String(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchUsers();
-  }, []);
 
   const handleCreate = async () => {
     if (!form.email || !form.name || !form.password) return;
@@ -71,7 +59,8 @@ const UsersPage = (): JSX.Element => {
       setShowAdd(false);
       setForm({ email: "", name: "", role: "TENANT_ADMIN", password: "" });
       setCreateError(null);
-      fetchUsers();
+      setPage(1);
+      reload();
     } catch (err: any) {
       setCreateError(err.response?.data?.error || "Erreur lors de la création");
     }
@@ -80,18 +69,25 @@ const UsersPage = (): JSX.Element => {
   const toggleStatus = async (id: string) => {
     try {
       const res = await api.patch(`/api/v1/users/${id}/toggle`);
-      setUsers(prev => prev.map(u => (u.id === id ? { ...u, isActive: res.data.isActive } : u)));
+      updateItems(prev => prev.map(u => (u.id === id ? { ...u, isActive: res.data.isActive } : u)));
     } catch (err) {
       logger.error(String(err));
     }
   };
 
-  const changeRole = async (id: string, role: string) => {
+  const changeRole = async (id: string, role: string): Promise<void> => {
+    setRoleError(null);
     try {
       await api.patch(`/api/v1/users/${id}/role`, { role });
-      setUsers(prev => prev.map(u => (u.id === id ? { ...u, role } : u)));
-    } catch (err) {
+      updateItems(prev => prev.map(u => (u.id === id ? { ...u, role } : u)));
+    } catch (err: unknown) {
       logger.error(String(err));
+      const response = isAxiosError<{ error?: unknown }>(err) ? err.response : undefined;
+      const message = response?.status === 403 ? response.data?.error : undefined;
+      setRoleError({
+        userId: id,
+        message: typeof message === "string" ? message : "Erreur lors de la modification du rôle.",
+      });
     }
   };
 
@@ -124,7 +120,7 @@ const UsersPage = (): JSX.Element => {
     setDeleteError(null);
     try {
       await api.delete(`/api/v1/users/${deleteTarget.id}`);
-      setUsers(prev => prev.filter(u => u.id !== deleteTarget.id));
+      reload();
       setDeleteTarget(null);
     } catch (err: any) {
       setDeleteError(err.response?.data?.error || "Erreur lors de la suppression");
@@ -151,14 +147,22 @@ const UsersPage = (): JSX.Element => {
     );
   }
 
-  if (loading) return <div className="flex items-center justify-center h-64">Chargement...</div>;
+  if (loading && !result) return <div className="flex items-center justify-center h-64">Chargement...</div>;
+  if (error) return (
+    <div className="space-y-3">
+      <p role="alert">Erreur de chargement des utilisateurs.</p>
+      <Button variant="outline" onClick={reload}>Réessayer</Button>
+    </div>
+  );
+
+  const assignableRoles = ROLES.filter(role => role.value !== "SUPER_ADMIN" || user.role === "SUPER_ADMIN");
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Utilisateurs</h1>
-          <p className="text-muted-foreground">{users.length} utilisateur(s)</p>
+          <p className="text-muted-foreground">{result?.total ?? 0} utilisateur(s)</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => setShowChangePassword(true)}>🔑 Mon mot de passe</Button>
@@ -184,12 +188,17 @@ const UsersPage = (): JSX.Element => {
                   <td className="p-3 font-medium">{u.name}</td>
                   <td className="p-3 text-muted-foreground">{u.email}</td>
                   <td className="p-3">
-                    <Select defaultValue={u.role} onValueChange={(role) => changeRole(u.id, role)}>
-                      <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                    <Select value={u.role} onValueChange={(role) => changeRole(u.id, role)}>
+                      <SelectTrigger className="w-44">
+                        <SelectValue>{ROLES.find(role => role.value === u.role)?.label ?? u.role}</SelectValue>
+                      </SelectTrigger>
                       <SelectContent>
-                        {ROLES.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
+                        {assignableRoles.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
                       </SelectContent>
                     </Select>
+                    {roleError?.userId === u.id && (
+                      <p role="alert" className="mt-1 text-sm text-destructive">{roleError.message}</p>
+                    )}
                   </td>
                   <td className="p-3">
                     <Badge variant={u.isActive ? "default" : "destructive"}>
@@ -216,6 +225,8 @@ const UsersPage = (): JSX.Element => {
         </CardContent>
       </Card>
 
+      {result && <PaginationControls page={result.page} totalPages={result.totalPages} loading={loading} onPageChange={setPage} />}
+
       {/* Dialog ajouter */}
       <Dialog open={showAdd} onOpenChange={(open) => open ? openAddDialog() : closeAddDialog()}>
         <DialogContent>
@@ -228,7 +239,7 @@ const UsersPage = (): JSX.Element => {
               <Label>Rôle</Label>
               <Select value={form.role} onValueChange={role => setForm({ ...form, role })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{ROLES.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}</SelectContent>
+                <SelectContent>{assignableRoles.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             {createError && <div className="p-3 text-sm bg-red-500/10 text-red-400 rounded-md">{createError}</div>}
@@ -265,7 +276,7 @@ const UsersPage = (): JSX.Element => {
       <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Supprimer l'utilisateur</DialogTitle>
+            <DialogTitle>Supprimer l&apos;utilisateur</DialogTitle>
             <DialogDescription>
               Êtes-vous sûr de vouloir supprimer définitivement <strong>{deleteTarget?.name}</strong> ({deleteTarget?.email}) ? Cette action est irréversible.
             </DialogDescription>

@@ -12,11 +12,13 @@ export const validate = (schema: AnyZodObject) => {
   return (req: Request, res: Response, next: NextFunction) => {
     try {
       // Validate request data against schema
-      schema.parse({
+      const parsed = schema.parse({
         body: req.body,
         query: req.query,
         params: req.params,
       });
+      if (parsed.body !== undefined) res.locals.validatedBody = parsed.body;
+      if (parsed.query !== undefined) res.locals.validatedQuery = parsed.query;
       return next();
       
     } catch (error) {

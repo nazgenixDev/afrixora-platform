@@ -1,131 +1,89 @@
 #!/bin/bash
-# AFRIXORA Deployment Script
-# This script automates the deployment process for the AFRIXORA platform
-# It checks prerequisites, pulls latest code, builds containers, runs migrations, and starts services
+set -euo pipefail
 
-set -e  # Exit immediately if a command exits with a non-zero status
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.."
 
-# Text formatting
-BOLD="\033[1m"
-GREEN="\033[0;32m"
-YELLOW="\033[0;33m"
-RED="\033[0;31m"
-NC="\033[0m" # No Color
-
-# Print header
-echo -e "${BOLD}AFRIXORA Deployment Script${NC}"
-echo -e "© 2026 NAZGENIX SAS — Lubumbashi, RDC"
-echo "----------------------------------------"
-
-# Check if running as root
-if [ "$EUID" -eq 0 ]; then
-  echo -e "${YELLOW}Warning: Running as root. Consider using a non-root user with Docker permissions.${NC}"
-fi
-
-# Function to check if a command exists
-command_exists() {
-  command -v "$1" >/dev/null 2>&1
-}
-
-# Check prerequisites
-echo -e "\n${BOLD}Checking prerequisites...${NC}"
-
-# Check Docker
-if ! command_exists docker; then
-  echo -e "${RED}Error: Docker is not installed. Please install Docker first.${NC}"
-  echo "Visit https://docs.docker.com/engine/install/ for installation instructions."
+if ! docker compose version >/dev/null 2>&1; then
+  echo "Docker et le plugin Docker Compose sont requis." >&2
   exit 1
 fi
-echo -e "${GREEN}✓ Docker is installed${NC}"
 
-# Check Docker Compose
-if ! command_exists docker compose; then
-  echo -e "${RED}Error: Docker Compose is not installed or not in PATH.${NC}"
-  echo "Visit https://docs.docker.com/compose/install/ for installation instructions."
-  exit 1
-fi
-echo -e "${GREEN}✓ Docker Compose is installed${NC}"
-
-# Check .env file
 if [ ! -f .env ]; then
-  echo -e "${RED}Error: .env file not found.${NC}"
-  echo "Please create a .env file based on .env.example"
-  
-  if [ -f .env.example ]; then
-    echo -e "${YELLOW}Creating .env from .env.example (you MUST edit it with real values)${NC}"
-    cp .env.example .env
-    echo -e "${YELLOW}⚠️ IMPORTANT: Edit .env with real values before continuing!${NC}"
-    exit 1
-  else
-    echo -e "${RED}Error: .env.example not found either. Cannot continue.${NC}"
+  echo "Fichier .env absent. Copiez .env.example et renseignez les valeurs du serveur." >&2
+  exit 1
+fi
+
+# Les valeurs de .env sont exportées pour Bash et Docker Compose.
+set -a
+source ./.env
+set +a
+
+: "${DOMAIN:?Renseignez DOMAIN dans .env}"
+: "${DB_PASSWORD:?Renseignez DB_PASSWORD dans .env}"
+: "${REDIS_PASSWORD:?Renseignez REDIS_PASSWORD dans .env}"
+
+retention_days="${RETENTION_DAYS:-365}"
+if [[ ! "$retention_days" =~ ^[1-9][0-9]*$ ]]; then
+  echo "RETENTION_DAYS doit être un entier strictement positif." >&2
+  exit 1
+fi
+
+wait_timeout="${DEPLOY_WAIT_TIMEOUT:-180}"
+
+# Un ancien montage peut laisser les données dans le conteneur ou un volume anonyme.
+postgres_container=$(docker compose ps --all --quiet postgres)
+if [ -n "$postgres_container" ]; then
+  postgres_volume=$(docker inspect --format \
+    '{{range .Mounts}}{{if eq .Destination "/home/postgres/pgdata/data"}}{{.Name}}{{end}}{{end}}' \
+    "$postgres_container")
+  if [ -z "$postgres_volume" ] || [ "$(docker volume inspect --format \
+    '{{index .Labels "com.docker.compose.volume"}}' "$postgres_volume")" != afrixora_postgres_data ]; then
+    echo "PostgreSQL utilise un ancien stockage. Suivez la procédure de sauvegarde et de restauration dans DEPLOYMENT.md avant de redéployer." >&2
     exit 1
   fi
 fi
-echo -e "${GREEN}✓ .env file exists${NC}"
 
-# Pull latest changes if in a git repository
-if [ -d .git ]; then
-  echo -e "\n${BOLD}Pulling latest changes...${NC}"
-  git pull
-  echo -e "${GREEN}✓ Code updated${NC}"
-fi
-
-# Build and start containers
-echo -e "\n${BOLD}Building containers...${NC}"
+echo "Construction des images applicatives..."
 docker compose build
-echo -e "${GREEN}✓ Containers built${NC}"
 
-# Create mosquitto password file if it doesn't exist
-if [ ! -f infrastructure/docker/mosquitto_passwd ]; then
-  echo -e "\n${BOLD}Creating Mosquitto password file...${NC}"
-  
-  # Extract MQTT credentials from .env
-  MQTT_API_USER=$(grep MQTT_API_USER .env | cut -d '=' -f2)
-  MQTT_API_PASSWORD=$(grep MQTT_API_PASSWORD .env | cut -d '=' -f2)
-  
-  if [ -z "$MQTT_API_USER" ] || [ -z "$MQTT_API_PASSWORD" ]; then
-    echo -e "${YELLOW}Warning: MQTT credentials not found in .env${NC}"
-    echo -e "${YELLOW}Creating default credentials (you should change these)${NC}"
-    MQTT_API_USER="afrixora_api"
-    MQTT_API_PASSWORD="changeme"
-  fi
-  
-  # Create password file
-  docker run --rm -v "$(pwd)/infrastructure/docker:/mosquitto" eclipse-mosquitto:2 \
-    mosquitto_passwd -c /mosquitto/mosquitto_passwd "$MQTT_API_USER" "$MQTT_API_PASSWORD"
-  
-  echo -e "${GREEN}✓ Mosquitto password file created${NC}"
+password_file=infrastructure/docker/mosquitto_passwd
+if [ ! -f "$password_file" ]; then
+  : "${MQTT_API_USER:?Renseignez MQTT_API_USER dans .env}"
+  : "${MQTT_API_PASSWORD:?Renseignez MQTT_API_PASSWORD dans .env}"
+
+  echo "Création du fichier de mots de passe Mosquitto..."
+  temp_password_file=$(mktemp "${password_file}.XXXXXX")
+  trap 'rm -f -- "$temp_password_file"' EXIT
+  docker run --rm --entrypoint sh eclipse-mosquitto:2 -ec '
+    mosquitto_passwd -b -c /tmp/mosquitto_passwd "$1" "$2"
+    cat /tmp/mosquitto_passwd
+  ' sh "$MQTT_API_USER" "$MQTT_API_PASSWORD" > "$temp_password_file"
+  chmod 644 "$temp_password_file"
+  mv -- "$temp_password_file" "$password_file"
 fi
 
-# Run database migrations
-echo -e "\n${BOLD}Running database migrations...${NC}"
-docker compose up -d postgres
-echo "Waiting for PostgreSQL to be ready..."
-sleep 10  # Give PostgreSQL time to start
+echo "Démarrage de PostgreSQL et attente du contrôle de santé..."
+docker compose up -d --wait --wait-timeout "$wait_timeout" postgres
 
-# Run migrations
-docker compose run --rm api npx prisma migrate deploy
-echo -e "${GREEN}✓ Database migrations applied${NC}"
+# Prisma initialise son historique avant la création des tables hors Prisma.
+echo "Application des migrations Prisma..."
+docker compose run --rm -T --no-deps api ./node_modules/.bin/prisma migrate deploy
 
-# Seed database if needed
-if [ "$1" == "--seed" ]; then
-  echo -e "\n${BOLD}Seeding database...${NC}"
-  docker compose run --rm api npx prisma db seed
-  echo -e "${GREEN}✓ Database seeded${NC}"
+echo "Application du schéma TimescaleDB..."
+docker compose exec -T postgres sh -ec '
+  export PGPASSWORD="$POSTGRES_PASSWORD"
+  exec psql -X -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+    -v ON_ERROR_STOP=1 -v RETENTION_DAYS="$1" --single-transaction -f -
+' sh "$retention_days" < infrastructure/scripts/01_schema.sql
+
+if [ "${1:-}" = "--seed" ]; then
+  echo "Initialisation du compte administrateur..."
+  docker compose run --rm -T --no-deps api ./node_modules/.bin/prisma db seed
 fi
 
-# Start all services
-echo -e "\n${BOLD}Starting all services...${NC}"
-docker compose up -d
-echo -e "${GREEN}✓ All services started${NC}"
-
-# Check service status
-echo -e "\n${BOLD}Checking service status...${NC}"
+echo "Démarrage des services et attente des contrôles de santé..."
+docker compose up -d --wait --wait-timeout "$wait_timeout"
 docker compose ps
 
-echo -e "\n${GREEN}${BOLD}AFRIXORA deployment completed successfully!${NC}"
-echo -e "Access the platform at: https://${DOMAIN}"
-echo -e "Grafana dashboard: https://grafana.${DOMAIN}"
-echo -e "API endpoint: https://api.${DOMAIN}"
-echo -e "\nTo view logs: docker compose logs -f"
-echo -e "To stop all services: docker compose down"
+printf 'Application : https://%s\nAPI : https://api.%s\nGrafana : https://grafana.%s\n' \
+  "$DOMAIN" "$DOMAIN" "$DOMAIN"

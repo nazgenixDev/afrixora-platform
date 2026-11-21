@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: timescale/timescaledb-ha:pg15-ts2.15
@@ -12,13 +10,13 @@ services:
     expose:
       - "5432"
     volumes:
-      - afrixora_postgres_data:/var/lib/postgresql/data
+      - afrixora_postgres_data:/home/postgres/pgdata/data
     environment:
       - POSTGRES_USER=afrixora
       - POSTGRES_PASSWORD=${DB_PASSWORD}
       - POSTGRES_DB=afrixora_prod
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U afrixora -d afrixora_prod"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -39,7 +37,7 @@ services:
     volumes:
       - afrixora_redis_data:/data
     command: >
-      redis-server --requirepass "${REDIS_PASSWORD}"
+      redis-server --requirepass "${REDIS_PASSWORD}" --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -92,7 +90,11 @@ services:
       - RESEND_API_KEY=${RESEND_API_KEY}
       - DOMAIN=${DOMAIN}
       - CORS_ORIGINS=${CORS_ORIGINS}
+      - TRUST_PROXY_HOPS=${TRUST_PROXY_HOPS:-1}
       - ENERGY_COST_PER_KWH=${ENERGY_COST_PER_KWH}
+      # Mot de passe du compte admin créé par `prisma db seed`.
+      # Obligatoire en production : le seed refuse de s'exécuter sinon.
+      - SEED_ADMIN_PASSWORD=${SEED_ADMIN_PASSWORD}
     depends_on:
       postgres:
         condition: service_healthy
@@ -108,7 +110,10 @@ services:
       - "traefik.http.services.api.loadbalancer.server.port=4000"
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://api.${DOMAIN}}"
     restart: unless-stopped
     deploy:
       resources:
@@ -119,7 +124,6 @@ services:
       - "3000"
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=https://api.${DOMAIN}
     depends_on:
       - api
     networks:
@@ -156,7 +160,7 @@ services:
       - afrixora_net
 
   traefik:
-    image: traefik:v3.0
+    image: traefik:v3.7.19
     restart: unless-stopped
     expose:
       - "80"
@@ -186,17 +190,24 @@ services:
   grafana:
     image: grafana/grafana:latest
     restart: unless-stopped
-    ports:
-      - "3001:3000"
+    expose:
+      - "3000"
     volumes:
       - afrixora_grafana_data:/var/lib/grafana
       - ./infrastructure/monitoring/datasources:/etc/grafana/provisioning/datasources:ro
       - ./infrastructure/monitoring/dashboards:/etc/grafana/provisioning/dashboards:ro
     environment:
+      - DB_PASSWORD=${DB_PASSWORD}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=https://grafana.${DOMAIN}
       - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
     depends_on:
       - postgres
     networks:

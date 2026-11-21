@@ -1,4 +1,9 @@
 import { query } from '../utils/database';
+import { avgPowerSql, energyPeriodHours, energySamplesSql, energyTimeZone, latestPowerW, totalEnergySql } from './energyQueries';
+
+function periodSamplesSql(period: string) {
+  return energySamplesSql("NOW() - $3::integer * INTERVAL '1 hour'", 'NOW()', period !== '24h');
+}
 
 export class EnergyService {
   async getReadings(
@@ -45,93 +50,73 @@ export class EnergyService {
 
   async getConsumption(tenantId: string, buildingId: string, period: string) {
     const interval = period === '24h' ? '1 hour' : '1 day';
-    const hours = period === '24h' ? '24' : period === '7d' ? '168' : '720';
-
     const result = await query(
-      `SELECT 
-         time_bucket($1::interval, time) AS bucket,
-         SUM(CASE WHEN sr.metric = 'energy_kwh' THEN sr.value ELSE 0 END) AS total_kwh,
-         AVG(CASE WHEN sr.metric = 'power_w' THEN sr.value ELSE NULL END) AS avg_power_w
-       FROM sensor_readings sr
-       JOIN "Device" d ON sr.device_id = d.id::uuid
-       WHERE d."buildingId" = $2
-         AND sr.tenant_id = $3::uuid
-         AND time > NOW() - ($4 || ' hours')::interval
-       GROUP BY bucket
-       ORDER BY bucket ASC`,
-      [interval, buildingId, tenantId, hours]
+      `WITH ${periodSamplesSql(period)}
+       SELECT time_bucket($4::interval, bucket, $5::text) AS bucket,
+              SUM(total) FILTER (WHERE metric = 'energy_kwh') AS total_kwh,
+              ${avgPowerSql} AS avg_power_w
+       FROM samples
+       GROUP BY 1
+       HAVING COUNT(*) FILTER (WHERE metric = 'energy_kwh') > 0
+       ORDER BY 1`,
+      [tenantId, buildingId, energyPeriodHours(period), interval, energyTimeZone]
     );
     return result.rows;
   }
 
   async getByDevice(tenantId: string, buildingId: string, period: string) {
-    const hours = period === '24h' ? '24' : period === '7d' ? '168' : '720';
-    
     const result = await query(
-      `SELECT 
-         d.id AS "deviceId",
-         d.name,
-         SUM(CASE WHEN sr.metric = 'energy_kwh' THEN sr.value ELSE 0 END) AS total_kwh
-       FROM sensor_readings sr
-       JOIN "Device" d ON sr.device_id = d.id::uuid
-       WHERE d."buildingId" = $1
-         AND sr.tenant_id = $2::uuid
-         AND time > NOW() - ($3 || ' hours')::interval
+      `WITH ${periodSamplesSql(period)}
+       SELECT d.id AS "deviceId", d.name, ${totalEnergySql} AS total_kwh
+       FROM samples s
+       JOIN devices d ON d.device_id = s.device_id
+       WHERE s.metric = 'energy_kwh'
        GROUP BY d.id, d.name
        ORDER BY total_kwh DESC`,
-      [buildingId, tenantId, hours]
+      [tenantId, buildingId, energyPeriodHours(period)]
     );
     return result.rows;
   }
 
   async getByZone(tenantId: string, buildingId: string, period: string) {
-    const hours = period === '24h' ? '24' : period === '7d' ? '168' : '720';
-    
     const result = await query(
-      `SELECT 
-         z.id AS "zoneId",
-         z.name,
-         SUM(CASE WHEN sr.metric = 'energy_kwh' THEN sr.value ELSE 0 END) AS total_kwh
-       FROM sensor_readings sr
-       JOIN "Device" d ON sr.device_id = d.id::uuid
+      `WITH ${periodSamplesSql(period)}
+       SELECT z.id AS "zoneId", z.name, ${totalEnergySql} AS total_kwh
+       FROM samples s
+       JOIN devices d ON d.device_id = s.device_id
        LEFT JOIN "Zone" z ON d."zoneId" = z.id
-       WHERE d."buildingId" = $1
-         AND sr.tenant_id = $2::uuid
-         AND time > NOW() - ($3 || ' hours')::interval
+       WHERE s.metric = 'energy_kwh'
        GROUP BY z.id, z.name
        ORDER BY total_kwh DESC`,
-      [buildingId, tenantId, hours]
+      [tenantId, buildingId, energyPeriodHours(period)]
     );
     return result.rows;
   }
 
   async getSummary(tenantId: string, buildingId: string, period: string) {
-    const hours = period === '24h' ? '24' : period === '7d' ? '168' : '720';
     const costPerKwh = parseFloat(process.env.ENERGY_COST_PER_KWH || '0.12');
-
-    const result = await query(
-      `SELECT 
-         SUM(CASE WHEN sr.metric = 'energy_kwh' THEN sr.value ELSE 0 END) AS total_kwh,
-         MAX(CASE WHEN sr.metric = 'power_w' THEN sr.value ELSE 0 END) AS peak_power_w,
-         AVG(CASE WHEN sr.metric = 'power_w' THEN sr.value ELSE NULL END) AS avg_power_w,
-         COUNT(DISTINCT sr.device_id) AS device_count
-       FROM sensor_readings sr
-       JOIN "Device" d ON sr.device_id = d.id::uuid
-       WHERE d."buildingId" = $1
-         AND sr.tenant_id = $2::uuid
-         AND time > NOW() - ($3 || ' hours')::interval`,
-      [buildingId, tenantId, hours]
-    );
+    const [result, currentPowerW] = await Promise.all([
+      query(
+        `WITH ${periodSamplesSql(period)}
+         SELECT ${totalEnergySql} AS total_kwh,
+                MAX(maximum) FILTER (WHERE metric = 'power_w') AS peak_power_w,
+                ${avgPowerSql} AS avg_power_w,
+                COUNT(DISTINCT device_id) AS device_count
+         FROM samples`,
+        [tenantId, buildingId, energyPeriodHours(period)]
+      ),
+      latestPowerW(tenantId, buildingId),
+    ]);
 
     const row = result.rows[0];
-    const totalKwh = parseFloat(row.total_kwh) || 0;
-    
+    const totalKwh = Number(row.total_kwh);
     return {
       totalKwh,
       estimatedCostUSD: +(totalKwh * costPerKwh).toFixed(2),
-      peakPowerW: parseFloat(row.peak_power_w) || 0,
-      avgPowerW: parseFloat(row.avg_power_w) || 0,
-      deviceCount: parseInt(row.device_count, 10) || 0
+      peakPowerW: Number(row.peak_power_w),
+      avgPowerW: Number(row.avg_power_w),
+      currentPowerW,
+      deviceCount: Number(row.device_count),
     };
   }
 }

@@ -10,6 +10,18 @@ export class AppError extends Error {
   }
 }
 
+export class UnauthorizedError extends AppError {
+  constructor(message = 'Identifiants invalides', code = 'INVALID_CREDENTIALS') {
+    super(message, 401, code);
+  }
+}
+
+export class ForbiddenError extends AppError {
+  constructor(message = 'Accès interdit', code = 'FORBIDDEN') {
+    super(message, 403, code);
+  }
+}
+
 export class NotFoundError extends AppError {
   constructor(message = 'Resource not found') {
     super(message, 404, 'NOT_FOUND');

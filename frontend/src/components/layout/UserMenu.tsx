@@ -129,7 +129,7 @@ const UserMenu = ({ collapsed = false }: UserMenuProps) => {
         </DropdownMenuItem>
         <DropdownMenuItem className="cursor-pointer flex items-center gap-2" disabled>
           <Smartphone className="h-4 w-4" />
-          Télécharger l'app mobile
+          Télécharger l&apos;app mobile
         </DropdownMenuItem>
         <DropdownMenuItem className="cursor-pointer flex items-center gap-2" disabled>
           <HelpCircle className="h-4 w-4" />

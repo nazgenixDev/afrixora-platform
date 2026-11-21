@@ -10,7 +10,7 @@ datasources:
     url: postgres:5432
     user: afrixora
     secureJsonData:
-      password: ${DB_PASSWORD}
+      password: $DB_PASSWORD
     jsonData:
       database: afrixora_prod
       sslmode: disable

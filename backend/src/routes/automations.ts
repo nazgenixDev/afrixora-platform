@@ -3,6 +3,13 @@ import automationService from '../services/automationService';
 import { authenticate } from '../middleware/authenticate';
 import { authorize } from '../middleware/authorize';
 import { checkAutomationLimit } from '../middleware/checkLimits';
+import { validate } from '../middleware/validate';
+import {
+  createAutomationSchema,
+  updateAutomationSchema,
+  type CreateAutomationInput,
+  type UpdateAutomationInput,
+} from '../utils/automationSchemas';
 
 const router = Router();
 
@@ -15,18 +22,20 @@ router.get('/', authenticate, async (req, res, next) => {
   }
 });
 
-router.post('/', authenticate, authorize(['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN']), checkAutomationLimit, async (req, res, next) => {
+router.post('/', authenticate, authorize(['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN']), validate(createAutomationSchema), checkAutomationLimit, async (req, res, next) => {
   try {
-    const automation = await automationService.create(req.body, req.user!.tenantId);
+    const body: CreateAutomationInput = res.locals.validatedBody;
+    const automation = await automationService.create(body, req.user!.tenantId);
     res.status(201).json(automation);
   } catch (error) {
     next(error);
   }
 });
 
-router.patch('/:id', authenticate, authorize(['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN']), async (req, res, next) => {
+router.patch('/:id', authenticate, authorize(['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN']), validate(updateAutomationSchema), async (req, res, next) => {
   try {
-    const automation = await automationService.update(req.params.id, req.body, req.user!.tenantId);
+    const body: UpdateAutomationInput = res.locals.validatedBody;
+    const automation = await automationService.update(req.params.id, body, req.user!.tenantId);
     res.json(automation);
   } catch (error) {
     next(error);

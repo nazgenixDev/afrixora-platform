@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { logger } from '@/lib/logger';
 import useStore from '@/store';
 
 interface UseSocketOptions {
@@ -10,7 +11,7 @@ interface UseSocketOptions {
 /**
  * Hook for managing Socket.IO connection to the AFRIXORA backend
  * Handles authentication, room joining, and event listening
- * Note: L'authentification Socket.IO utilise le cookie httpOnly (withCredentials)
+ * L'authentification utilise le cookie httpOnly, avec repli localStorage en développement.
  */
 const useSocket = ({ buildingId, enabled = true }: UseSocketOptions = {}) => {
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -27,8 +28,10 @@ const useSocket = ({ buildingId, enabled = true }: UseSocketOptions = {}) => {
     }
 
     // Initialize socket connection (cookie httpOnly envoyé auto via withCredentials)
+    const token = process.env.NODE_ENV === 'development' ? localStorage.getItem('afrixora_token') : null;
     const socketInstance = io(process.env.NEXT_PUBLIC_API_URL || '', {
       withCredentials: true,
+      ...(token ? { auth: { token } } : {}),
       transports: ['websocket'],
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
@@ -41,18 +44,18 @@ const useSocket = ({ buildingId, enabled = true }: UseSocketOptions = {}) => {
       
       // Join building room
       socketInstance.emit('join:building', buildingId);
-      console.log(`Socket connected and joined building:${buildingId}`);
+      logger.debug('Connexion Socket.IO établie ; demande de rejoindre le bâtiment envoyée', { buildingId });
     });
 
     socketInstance.on('connect_error', (err) => {
       setIsConnected(false);
       setError(`Connection error: ${err.message}`);
-      console.error('Socket connection error:', err);
+      logger.error('Erreur de connexion Socket.IO', err);
     });
 
     socketInstance.on('disconnect', (reason) => {
       setIsConnected(false);
-      console.log(`Socket disconnected: ${reason}`);
+      logger.debug('Socket.IO déconnecté', { reason });
     });
 
     // Data event handlers
@@ -83,7 +86,7 @@ const useSocket = ({ buildingId, enabled = true }: UseSocketOptions = {}) => {
     socketInstance.on('automation:fired', (data) => {
       // Log automation notification (would show toast in UI)
       if (data && data.ruleName) {
-        console.log(`Automation déclenchée: La règle "${data.ruleName}" a été exécutée`);
+        logger.debug(`Automatisation déclenchée : la règle « ${data.ruleName} » a été exécutée`);
         // In a real implementation, we would show a toast notification here
       }
     });
@@ -102,7 +105,7 @@ const useSocket = ({ buildingId, enabled = true }: UseSocketOptions = {}) => {
         socketInstance.off('alert:new');
         socketInstance.off('automation:fired');
         socketInstance.disconnect();
-        console.log('Socket disconnected (cleanup)');
+        logger.debug('Socket.IO déconnecté lors du nettoyage');
       }
     };
   }, [buildingId, enabled, setReading, updateDevice, addAlert]);

@@ -97,7 +97,7 @@ const EnergyChart: React.FC<EnergyChartProps> = ({ data, period, className }) =>
   return (
     <Card className={className}>
       <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle>Consommation d'énergie</CardTitle>
+        <CardTitle>Consommation d&apos;énergie</CardTitle>
         <Zap className="w-4 h-4 text-brand-500" />
       </CardHeader>
       <CardContent>

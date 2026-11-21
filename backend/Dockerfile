@@ -1,10 +1,9 @@
-# Stage 1: Builder
+# Construction de l’API et des outils Prisma
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install dependencies for building native modules
-RUN apk add --no-cache python3 make g++
+RUN apk add --no-cache python3 make g++ openssl
 
 # Copy package files and install dependencies
 COPY package*.json ./
@@ -16,11 +15,12 @@ COPY prisma ./prisma/
 # Generate Prisma client
 RUN npx prisma generate
 
-# Copy source code
-COPY . .
+COPY tsconfig.json ./
+COPY src ./src/
 
-# Build TypeScript code
-RUN npm run build
+RUN npm run build \
+    && ./node_modules/.bin/tsc --target ES2020 --module commonjs --esModuleInterop \
+       --skipLibCheck --outDir /app/seed prisma/seed.ts
 
 # Stage 2: Runner
 FROM node:20-alpine
@@ -30,25 +30,29 @@ WORKDIR /app
 # Set environment variables
 ENV NODE_ENV=production
 
-# Install dependencies for production
-RUN apk add --no-cache tzdata
+# OpenSSL est également requis par les moteurs Prisma dans le conteneur final.
+RUN apk add --no-cache tzdata openssl
 
 # Set timezone
 ENV TZ=Africa/Kinshasa
 
-# Copy package files and install production dependencies only
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
-# Copy Prisma schema and generated client
+# Copie du CLI et des moteurs à la version verrouillée par npm ci.
 COPY --from=builder /app/prisma ./prisma/
+COPY --from=builder /app/node_modules/prisma ./node_modules/prisma/
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma/
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma/
+COPY --from=builder /app/seed/seed.js ./prisma/seed.js
+RUN ln -sf ../prisma/build/index.js node_modules/.bin/prisma \
+    && npm pkg set 'prisma.seed=node prisma/seed.js'
 
 # Copy built files from builder stage
 COPY --from=builder /app/dist ./dist
 
-# Create a non-root user
-RUN addgroup -S afrixora && adduser -S afrixora -G afrixora
+RUN addgroup -S afrixora && adduser -S afrixora -G afrixora \
+    && mkdir /app/logs && chown afrixora:afrixora /app/logs
 USER afrixora
 
 # Expose the port the app runs on

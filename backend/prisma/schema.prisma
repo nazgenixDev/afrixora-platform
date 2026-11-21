@@ -214,7 +214,8 @@ model ApiKey {
   id        String    @id @default(uuid())
   tenantId  String
   name      String
-  key       String    @unique
+  keyHash   String    @unique @db.VarChar(64)
+  keyPrefix String    @db.VarChar(8)
   scope     String    @default("full")
   isActive  Boolean   @default(true)
   requests  Int       @default(0)

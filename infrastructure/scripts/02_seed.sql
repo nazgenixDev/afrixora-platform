@@ -5,7 +5,12 @@ BEGIN;
 INSERT INTO "Tenant" (id, name, slug, plan, "isActive", "createdAt")
 VALUES ('c0a80121-0000-4000-8000-000000000001', 'Client Démo', 'demo', 'CORE', true, NOW());
 
--- 2. Admin User (password: Admin123! bcrypt hash)
+-- 2. Admin User
+-- ATTENTION : le hash ci-dessous est un EXEMPLE non valide, présent uniquement
+-- pour que le script soit exécutable. Ne jamais l'utiliser en production.
+-- Le compte admin réel doit être créé par `prisma db seed` avec
+-- SEED_ADMIN_PASSWORD (voir .env.example). Le compte de démo ne doit jamais
+-- exister en production.
 INSERT INTO "User" (id, "tenantId", email, "passwordHash", name, role, "jwtVersion", "isActive", "createdAt")
 VALUES ('c0a80121-0000-4000-8000-000000000002',
         'c0a80121-0000-4000-8000-000000000001',

@@ -14,7 +14,7 @@ import api from "@/lib/api";
 import logger from "@/lib/logger";
 
 interface ApiKey {
-  id: string; name: string; key: string; scope: string; isActive: boolean;
+  id: string; name: string; keyPrefix: string; scope: string; isActive: boolean;
   requests: number; limit: number; lastUsed: string | null; createdAt: string;
 }
 
@@ -28,6 +28,14 @@ interface MonitoringStats {
   topEndpoints: { endpoint: string; count: number }[];
 }
 
+const API_KEY_NAME_MAX_LENGTH = 60;
+const ALL_LOGS = "__all__";
+const API_KEY_SCOPES = [
+  { value: "full", label: "Accès complet" },
+  { value: "read", label: "Lecture seule" },
+  { value: "write", label: "Lecture + Écriture" },
+];
+
 const ApiDashboardPage = (): JSX.Element => {
   const { limits, loading: limitsLoading } = useSubscriptionLimits();
   const router = useRouter();
@@ -39,12 +47,16 @@ const ApiDashboardPage = (): JSX.Element => {
   const [showGen, setShowGen] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyScope, setNewKeyScope] = useState("full");
+  const [creatingKey, setCreatingKey] = useState(false);
+  const [creationError, setCreationError] = useState(false);
+  const [createdKey, setCreatedKey] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
   const [revokeTarget, setRevokeTarget] = useState<ApiKey | null>(null);
   const [revokeLoading, setRevokeLoading] = useState(false);
   const [logsPage, setLogsPage] = useState(1);
   const [logsTotalPages, setLogsTotalPages] = useState(1);
-  const [filterMethod, setFilterMethod] = useState("");
-  const [filterStatus, setFilterStatus] = useState("");
+  const [filterMethod, setFilterMethod] = useState(ALL_LOGS);
+  const [filterStatus, setFilterStatus] = useState(ALL_LOGS);
   const [filterEndpoint, setFilterEndpoint] = useState("");
 
   // Rediriger si le plan ne donne pas accès à l'API
@@ -60,18 +72,6 @@ const ApiDashboardPage = (): JSX.Element => {
     setKeys(Array.isArray(raw) ? raw : (raw?.data ?? []));
   };
 
-  const fetchLogs = async () => {
-    try {
-      const params: any = { page: logsPage, limit: 50 };
-      if (filterMethod) params.method = filterMethod;
-      if (filterStatus) params.statusCode = filterStatus;
-      if (filterEndpoint) params.endpoint = filterEndpoint;
-      const res = await api.get("/api/v1/api-logs", { params });
-      setLogs(res.data.data || []);
-      setLogsTotalPages(res.data.pagination?.totalPages || 1);
-    } catch (err) { logger.error(String(err)); }
-  };
-
   const fetchStats = async () => {
     try {
       const res = await api.get("/api/v1/api-logs/stats");
@@ -79,14 +79,65 @@ const ApiDashboardPage = (): JSX.Element => {
     } catch (err) { logger.error(String(err)); }
   };
 
-  useEffect(() => { (async () => { await Promise.all([fetchKeys(), fetchLogs(), fetchStats()]); setLoading(false); })(); }, []);
-  useEffect(() => { fetchLogs(); }, [logsPage, filterMethod, filterStatus, filterEndpoint]);
+  useEffect(() => {
+    Promise.all([fetchKeys(), fetchStats()])
+      .catch(error => logger.error(String(error)))
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = {
+      page: logsPage,
+      limit: 50,
+      method: filterMethod === ALL_LOGS ? undefined : filterMethod,
+      statusCode: filterStatus === ALL_LOGS ? undefined : filterStatus,
+      endpoint: filterEndpoint || undefined,
+    };
+    api.get<{ data: ApiLog[]; pagination: { totalPages: number } }>("/api/v1/api-logs", { params, signal: controller.signal })
+      .then(({ data }) => {
+        if (controller.signal.aborted) return;
+        setLogs(data.data);
+        setLogsTotalPages(Math.max(1, data.pagination.totalPages));
+      })
+      .catch(error => { if (!controller.signal.aborted) logger.error(String(error)); });
+    return () => controller.abort();
+  }, [logsPage, filterMethod, filterStatus, filterEndpoint]);
 
-  const generateKey = async () => {
-    if (!newKeyName.trim()) return;
-    await api.post("/api/v1/api-keys", { name: newKeyName, scope: newKeyScope });
-    setShowGen(false); setNewKeyName(""); setNewKeyScope("full");
-    fetchKeys();
+  const keyName = newKeyName.trim();
+  const canGenerateKey = keyName.length >= 1 && keyName.length <= API_KEY_NAME_MAX_LENGTH
+    && API_KEY_SCOPES.some(({ value }) => value === newKeyScope);
+
+  const generateKey = async (): Promise<void> => {
+    if (!canGenerateKey || creatingKey) return;
+    setCreatingKey(true);
+    setCreationError(false);
+    try {
+      const { data } = await api.post<ApiKey & { key: string }>("/api/v1/api-keys", {
+        name: keyName,
+        scope: newKeyScope,
+      });
+      const { key, ...metadata } = data;
+      setKeys(previous => [metadata, ...previous]);
+      setShowGen(false);
+      setNewKeyName("");
+      setNewKeyScope("full");
+      setCopyStatus("idle");
+      setCreatedKey(key);
+    } catch {
+      setCreationError(true);
+    } finally {
+      setCreatingKey(false);
+    }
+  };
+
+  const copyCreatedKey = async () => {
+    if (!createdKey) return;
+    try {
+      await navigator.clipboard.writeText(createdKey);
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("error");
+    }
   };
 
   const confirmRevoke = async () => {
@@ -114,16 +165,16 @@ const ApiDashboardPage = (): JSX.Element => {
         <TabsContent value="keys" className="space-y-4 mt-4">
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">{keys.filter(k => k.isActive).length} active(s) / {keys.length} totale(s)</p>
-            <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => setShowGen(true)}>+ Nouvelle clé</Button>
+            <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => { setCreationError(false); setShowGen(true); }}>+ Nouvelle clé</Button>
           </div>
           <div className="border rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-muted/50"><tr><th className="p-3 text-left">Nom</th><th className="p-3 text-left">Clé</th><th className="p-3 text-left">Scope</th><th className="p-3 text-left">Utilisation</th><th className="p-3 text-left">Statut</th><th className="p-3 text-left">Dernier appel</th><th className="p-3 text-left">Actions</th></tr></thead>
+              <thead className="bg-muted/50"><tr><th className="p-3 text-left">Nom</th><th className="p-3 text-left">Préfixe</th><th className="p-3 text-left">Scope</th><th className="p-3 text-left">Utilisation</th><th className="p-3 text-left">Statut</th><th className="p-3 text-left">Dernier appel</th><th className="p-3 text-left">Actions</th></tr></thead>
               <tbody>
                 {keys.map(k => (
                   <tr key={k.id} className="border-t hover:bg-muted/20">
                     <td className="p-3 font-medium">{k.name}</td>
-                    <td className="p-3 font-mono text-xs text-muted-foreground">{k.key}</td>
+                    <td className="p-3 font-mono text-xs text-muted-foreground">{k.keyPrefix}</td>
                     <td className="p-3"><Badge variant="outline">{k.scope}</Badge></td>
                     <td className="p-3"><div className="text-xs">{k.requests.toLocaleString()} / {k.limit.toLocaleString()}</div><div className="h-1 bg-muted rounded-full mt-1 overflow-hidden"><div className={`h-full rounded-full ${k.requests/k.limit>0.8?"bg-red-500":k.requests/k.limit>0.6?"bg-orange-500":"bg-emerald-500"}`} style={{width:`${Math.min(100,(k.requests/k.limit)*100)}%`}}/></div></td>
                     <td className="p-3"><Badge variant={k.isActive?"default":"destructive"}>{k.isActive?"Actif":"Révoqué"}</Badge></td>
@@ -142,11 +193,11 @@ const ApiDashboardPage = (): JSX.Element => {
             <Input placeholder="Endpoint..." className="max-w-[180px]" value={filterEndpoint} onChange={e => { setFilterEndpoint(e.target.value); setLogsPage(1); }} />
             <Select value={filterMethod} onValueChange={v => { setFilterMethod(v); setLogsPage(1); }}>
               <SelectTrigger className="w-28"><SelectValue placeholder="Méthode" /></SelectTrigger>
-              <SelectContent><SelectItem value="__all__">Toutes</SelectItem><SelectItem value="GET">GET</SelectItem><SelectItem value="POST">POST</SelectItem><SelectItem value="PATCH">PATCH</SelectItem><SelectItem value="DELETE">DELETE</SelectItem></SelectContent>
+              <SelectContent><SelectItem value={ALL_LOGS}>Toutes</SelectItem><SelectItem value="GET">GET</SelectItem><SelectItem value="POST">POST</SelectItem><SelectItem value="PATCH">PATCH</SelectItem><SelectItem value="DELETE">DELETE</SelectItem></SelectContent>
             </Select>
             <Select value={filterStatus} onValueChange={v => { setFilterStatus(v); setLogsPage(1); }}>
               <SelectTrigger className="w-32"><SelectValue placeholder="Statut" /></SelectTrigger>
-              <SelectContent><SelectItem value="__all__">Tous</SelectItem><SelectItem value="200">2xx</SelectItem><SelectItem value="400">4xx</SelectItem><SelectItem value="500">5xx</SelectItem></SelectContent>
+              <SelectContent><SelectItem value={ALL_LOGS}>Tous</SelectItem><SelectItem value="2xx">2xx</SelectItem><SelectItem value="4xx">4xx</SelectItem><SelectItem value="5xx">5xx</SelectItem></SelectContent>
             </Select>
             <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
               <Button variant="ghost" size="sm" disabled={logsPage<=1} onClick={() => setLogsPage(p => p-1)}>← Précédent</Button>
@@ -178,7 +229,7 @@ const ApiDashboardPage = (): JSX.Element => {
         <TabsContent value="monitor" className="mt-4">
           {stats && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-              <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Requêtes aujourd'hui</CardTitle></CardHeader><CardContent><div className="text-xl font-bold">{stats.totalRequestsToday}</div></CardContent></Card>
+              <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Requêtes aujourd&apos;hui</CardTitle></CardHeader><CardContent><div className="text-xl font-bold">{stats.totalRequestsToday}</div></CardContent></Card>
               <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Erreurs (4xx/5xx)</CardTitle></CardHeader><CardContent><div className="text-xl font-bold text-red-500">{stats.errorsToday}</div></CardContent></Card>
               <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Latence moyenne</CardTitle></CardHeader><CardContent><div className="text-xl font-bold">{stats.avgLatencyMs}<span className="text-sm text-muted-foreground">ms</span></div></CardContent></Card>
               <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Endpoints</CardTitle></CardHeader><CardContent><div className="text-xl font-bold">{stats.topEndpoints.length}</div></CardContent></Card>
@@ -199,14 +250,50 @@ const ApiDashboardPage = (): JSX.Element => {
       </Tabs>
 
       {/* Modal Générer une clé */}
-      <Dialog open={showGen} onOpenChange={setShowGen}>
+      <Dialog open={showGen} onOpenChange={open => { if (!creatingKey) setShowGen(open); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>Générer une nouvelle clé API</DialogTitle></DialogHeader>
           <div className="space-y-3">
-            <div><Label htmlFor="keyName">Nom de la clé</Label><Input id="keyName" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} /></div>
-            <div><Label>Portée (scope)</Label><Select value={newKeyScope} onValueChange={setNewKeyScope}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="full">Accès complet</SelectItem><SelectItem value="read">Lecture seule</SelectItem><SelectItem value="write">Lecture + Écriture</SelectItem><SelectItem value="gateway">Gateway uniquement</SelectItem></SelectContent></Select></div>
+            <div><Label htmlFor="keyName">Nom de la clé</Label><Input id="keyName" maxLength={API_KEY_NAME_MAX_LENGTH} value={newKeyName} onChange={e => setNewKeyName(e.target.value)} /></div>
+            <div>
+              <Label>Portée (scope)</Label>
+              <Select value={newKeyScope} onValueChange={setNewKeyScope}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {API_KEY_SCOPES.map(({ value, label }) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
-          <DialogFooter className="mt-4"><Button variant="outline" onClick={() => setShowGen(false)}>Annuler</Button><Button onClick={generateKey} className="bg-emerald-600 hover:bg-emerald-700">Générer la clé</Button></DialogFooter>
+          {creationError && <p role="alert" className="text-sm text-destructive">La création de la clé API a échoué.</p>}
+          <DialogFooter className="mt-4">
+            <Button variant="outline" disabled={creatingKey} onClick={() => setShowGen(false)}>Annuler</Button>
+            <Button onClick={generateKey} disabled={!canGenerateKey || creatingKey} className="bg-emerald-600 hover:bg-emerald-700">
+              {creatingKey ? "Génération en cours…" : "Générer la clé"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={createdKey !== null} onOpenChange={open => { if (!open) setCreatedKey(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Votre nouvelle clé API</DialogTitle>
+            <DialogDescription>
+              Copiez cette clé et conservez-la en lieu sûr. Elle ne sera plus affichée après la fermeture de cette fenêtre.
+            </DialogDescription>
+          </DialogHeader>
+          <div>
+            <Label htmlFor="created-api-key">Clé API</Label>
+            <Input id="created-api-key" readOnly value={createdKey ?? ""} className="font-mono" />
+          </div>
+          {copyStatus === "error" && <p role="alert" className="text-sm text-destructive">Sélectionnez la clé et copiez-la manuellement.</p>}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreatedKey(null)}>Fermer</Button>
+            <Button onClick={copyCreatedKey} disabled={copyStatus === "copied"}>
+              {copyStatus === "copied" ? "Clé copiée" : "Copier la clé"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

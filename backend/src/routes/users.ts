@@ -3,6 +3,7 @@ import { z } from "zod";
 import authenticate from "../middleware/authenticate";
 import { authorize } from "../middleware/authorize";
 import { validate } from "../middleware/validate";
+import { changeUserRole, createUser, deleteUser, resetUserPassword, toggleUserStatus } from "../services/userService";
 import prisma from "../utils/database";
 import bcrypt from "bcryptjs";
 
@@ -88,7 +89,7 @@ router.get(
             isActive: true,
             createdAt: true,
           },
-          orderBy: { createdAt: "desc" },
+          orderBy: [{ createdAt: "desc" }, { id: "asc" }],
           skip,
           take: limit,
         }),
@@ -115,17 +116,10 @@ router.post(
   validate(createUserSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { email, name, role, password } = req.body;
-      const passwordHash = await bcrypt.hash(password, 10);
-      const user = await prisma.user.create({
-        data: { tenantId: req.user!.tenantId, email, name, role, passwordHash },
-        select: { id: true, email: true, name: true, role: true, isActive: true, createdAt: true },
-      });
+      const body: z.infer<typeof createUserSchema>["body"] = req.body;
+      const user = await createUser(req.user!, body);
       return res.status(201).json(user);
-    } catch (err: unknown) {
-      if ((err as { code?: string }).code === "P2002") {
-        return res.status(409).json({ error: "Cet email existe déjà" });
-      }
+    } catch (err) {
       return next(err);
     }
   }
@@ -138,44 +132,30 @@ router.patch(
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const user = await prisma.user.findFirst({ where: { id: req.params.id, tenantId: req.user!.tenantId } });
-      if (!user) return res.status(404).json({ error: "Utilisateur introuvable" });
-      const updated = await prisma.user.update({
-        where: { id: req.params.id },
-        data: { isActive: !user.isActive },
-      });
-      return res.json({ id: updated.id, isActive: updated.isActive });
-    } catch (err) { return next(err); }
+      const updated = await toggleUserStatus(req.user!, req.params.id);
+      return res.json(updated);
+    } catch (err) {
+      return next(err);
+    }
   }
 );
 
-// PATCH /users/:id/role - change user role (admin only)
-router.patch('/:id/role', authenticate, authorize(['SUPER_ADMIN', 'TENANT_ADMIN']), async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { role } = req.body;
-    const validRoles = ['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN', 'OPERATOR', 'VIEWER'];
-    if (!role || !validRoles.includes(role)) {
-      return res.status(400).json({ error: 'Rôle invalide' });
+// Modifier le rôle d'un autre utilisateur (admin)
+router.patch(
+  "/:id/role",
+  authenticate,
+  authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
+  validate(changeRoleSchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { role }: z.infer<typeof changeRoleSchema>["body"] = req.body;
+      const updated = await changeUserRole(req.user!, req.params.id, role);
+      return res.json(updated);
+    } catch (err) {
+      return next(err);
     }
-
-    // 🔐 IMPORTANT : restreindre au même tenant
-    const targetUser = await prisma.user.findFirst({
-      where: { id, tenantId: req.user!.tenantId },
-    });
-    if (!targetUser) {
-      return res.status(404).json({ error: 'User not found in this tenant' });
-    }
-
-    const updated = await prisma.user.update({
-      where: { id, tenantId: req.user!.tenantId },
-      data: { role },
-    });
-    res.json(updated);
-  } catch (error) {
-    next(error);
   }
-});
+);
 
 // Réinitialiser le mot de passe d'un utilisateur (admin)
 router.patch(
@@ -185,13 +165,12 @@ router.patch(
   validate(resetPasswordSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { newPassword } = req.body;
-      const user = await prisma.user.findFirst({ where: { id: req.params.id, tenantId: req.user!.tenantId } });
-      if (!user) return res.status(404).json({ error: "Utilisateur introuvable" });
-      const newHash = await bcrypt.hash(newPassword, 10);
-      await prisma.user.update({ where: { id: user.id }, data: { passwordHash: newHash, jwtVersion: user.jwtVersion + 1 } });
+      const { newPassword }: z.infer<typeof resetPasswordSchema>["body"] = req.body;
+      await resetUserPassword(req.user!, req.params.id, newPassword);
       return res.json({ message: "Mot de passe réinitialisé." });
-    } catch (err) { return next(err); }
+    } catch (err) {
+      return next(err);
+    }
   }
 );
 
@@ -202,12 +181,11 @@ router.delete(
   authorize(["SUPER_ADMIN", "TENANT_ADMIN"]),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const user = await prisma.user.findFirst({ where: { id: req.params.id, tenantId: req.user!.tenantId } });
-      if (!user) return res.status(404).json({ error: "Utilisateur introuvable" });
-      if (user.id === req.user!.userId) return res.status(400).json({ error: "Vous ne pouvez pas supprimer votre propre compte" });
-      await prisma.user.delete({ where: { id: user.id } });
+      await deleteUser(req.user!, req.params.id);
       return res.json({ message: "Utilisateur supprimé." });
-    } catch (err) { return next(err); }
+    } catch (err) {
+      return next(err);
+    }
   }
 );
 
@@ -270,7 +248,8 @@ router.patch(
       const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
       if (!isValid) return res.status(400).json({ error: "Mot de passe actuel incorrect" });
       const newHash = await bcrypt.hash(newPassword, 10);
-      await prisma.user.update({ where: { id: user.id }, data: { passwordHash: newHash, jwtVersion: user.jwtVersion + 1 } });
+      // Incrément atomique pour préserver les révocations concurrentes.
+      await prisma.user.update({ where: { id: user.id }, data: { passwordHash: newHash, jwtVersion: { increment: 1 } } });
       return res.json({ message: "Mot de passe modifié. Veuillez vous reconnecter." });
     } catch (err) { return next(err); }
   }

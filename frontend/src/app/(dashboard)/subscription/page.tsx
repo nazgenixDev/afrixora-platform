@@ -128,7 +128,7 @@ export default function SubscriptionPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Abonnement</h1>
-          <p className="text-muted-foreground">Gérez votre plan et vos limites d'utilisation</p>
+          <p className="text-muted-foreground">Gérez votre plan et vos limites d&apos;utilisation</p>
         </div>
         <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-lg shadow-emerald-500/20">
           <CreditCard className="w-5 h-5 text-white" />

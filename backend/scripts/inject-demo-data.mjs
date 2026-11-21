@@ -14,10 +14,15 @@ dotenv.config({ path: resolve(__dirname, '../../.env') });
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://afrixora:afrixora_dev@localhost:5432/afrixora_dev';
 const MQTT_URL = process.env.MQTT_URL || 'mqtt://localhost:1883';
-const MQTT_USER = process.env.MQTT_API_USER || 'afrixora_api';
-const MQTT_PASS = process.env.MQTT_API_PASSWORD || '';
+const MQTT_DEMO_USER = process.env.MQTT_DEMO_USER;
+const MQTT_DEMO_PASSWORD = process.env.MQTT_DEMO_PASSWORD;
+const MQTT_USER = MQTT_DEMO_USER || process.env.MQTT_API_USER || 'afrixora_api';
+const MQTT_PASS = MQTT_DEMO_USER ? MQTT_DEMO_PASSWORD : process.env.MQTT_API_PASSWORD || '';
 
 async function main() {
+  if (Boolean(MQTT_DEMO_USER) !== Boolean(MQTT_DEMO_PASSWORD)) {
+    throw new Error('Renseignez MQTT_DEMO_USER et MQTT_DEMO_PASSWORD ensemble.');
+  }
   const pool = new pg.Pool({ connectionString: DATABASE_URL });
 
   // Get tenant, building, and devices from seed

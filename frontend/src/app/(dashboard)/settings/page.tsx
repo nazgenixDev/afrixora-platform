@@ -305,7 +305,7 @@ const NotificationsTab = () => {
               Alertes par email
             </Label>
             <p className="text-xs text-muted-foreground">
-              Recevez une notification par email en cas d'alerte critique ou d'événement important
+              Recevez une notification par email en cas d&apos;alerte critique ou d&apos;événement important
             </p>
           </div>
           <Switch
@@ -346,7 +346,7 @@ const AppearanceTab = () => {
             <Sun className="h-5 w-5 text-brand-500" />
             <div>
               <CardTitle>Apparence</CardTitle>
-              <CardDescription>Personnalisez l'apparence de votre interface</CardDescription>
+              <CardDescription>Personnalisez l&apos;apparence de votre interface</CardDescription>
             </div>
           </div>
         </CardHeader>
@@ -370,7 +370,7 @@ const AppearanceTab = () => {
           )}
           <div>
             <CardTitle>Apparence</CardTitle>
-            <CardDescription>Personnalisez l'apparence de votre interface</CardDescription>
+            <CardDescription>Personnalisez l&apos;apparence de votre interface</CardDescription>
           </div>
         </div>
       </CardHeader>
@@ -428,7 +428,7 @@ const AppearanceTab = () => {
         <div className="rounded-lg bg-muted/50 p-3">
           <p className="text-xs text-muted-foreground">
             <strong>Info :</strong> Le thème sélectionné est sauvegardé automatiquement et appliqué
-            sur toutes les pages de l'application.
+            sur toutes les pages de l&apos;application.
           </p>
         </div>
       </CardContent>

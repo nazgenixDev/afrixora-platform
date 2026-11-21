@@ -12,7 +12,7 @@ export const errorHandler = (
   error: Error,
   req: Request,
   res: Response,
-  next: NextFunction
+  _next: NextFunction
 ) => {
   // Log the error with details
   logger.error('Error occurred', {

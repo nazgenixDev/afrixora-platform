@@ -1,4 +1,6 @@
+import { Prisma, type ZoneType } from '@prisma/client';
 import { prisma } from '../utils/database';
+import { NotFoundError } from '../utils/errors';
 
 interface BuildingFilters {
   name?: string;
@@ -14,7 +16,7 @@ interface BuildingCreateData {
   address?: string;
   city?: string;
   unitsCount?: number;
-  config?: any;
+  config?: Prisma.InputJsonValue;
 }
 
 interface BuildingUpdateData {
@@ -22,14 +24,14 @@ interface BuildingUpdateData {
   address?: string;
   city?: string;
   unitsCount?: number;
-  config?: any;
+  config?: Prisma.InputJsonValue;
   isActive?: boolean;
 }
 
 interface ZoneCreateData {
   name: string;
   floor?: number;
-  type?: string;
+  type?: ZoneType;
 }
 
 export default {
@@ -39,9 +41,10 @@ export default {
     const [data, total] = await Promise.all([
       prisma.building.findMany({
         where: { tenantId, ...where, isActive: true },
+        orderBy: { id: 'asc' },
         skip,
         take: limit,
-        include: { zones: true, devices: true },
+        include: { _count: { select: { zones: true, devices: true } } },
       }),
       prisma.building.count({ where: { tenantId, ...where, isActive: true } }),
     ]);
@@ -87,24 +90,31 @@ export default {
   },
 
   async findById(id: string, tenantId: string) {
-    return prisma.building.findFirst({
+    const building = await prisma.building.findFirst({
       where: { id, tenantId, isActive: true },
-      include: { zones: true, devices: true },
+      include: { zones: { include: { _count: { select: { devices: true } } } }, devices: true },
     });
+    if (!building) throw new NotFoundError('Bâtiment introuvable');
+    return building;
   },
 
   async createZone(buildingId: string, data: ZoneCreateData, tenantId: string) {
     if (!data.name) throw new Error('Zone name is required');
-    // Le champ 'type' est un string, Prisma acceptera une valeur correspondant à l'enum ZoneType
-    const zoneType = data.type || 'ROOM';
-    return prisma.zone.create({
-      data: {
-        name: data.name,
-        buildingId,
-        tenantId,
-        floor: data.floor || 0,
-        type: zoneType as any,
-      },
-    });
+    try {
+      return await prisma.zone.create({
+        data: {
+          name: data.name,
+          building: { connect: { id: buildingId, tenantId } },
+          tenantId,
+          floor: data.floor ?? 0,
+          type: data.type ?? 'ROOM',
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        throw new NotFoundError('Bâtiment introuvable');
+      }
+      throw error;
+    }
   },
 };

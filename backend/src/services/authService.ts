@@ -1,6 +1,8 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { z } from 'zod';
 import { prisma } from '../utils/database';
+import { UnauthorizedError } from '../utils/errors';
 import logger from '../utils/logger';
 
 interface TokenPayload {
@@ -9,6 +11,12 @@ interface TokenPayload {
   role: string;
   jwtVersion: number;
 }
+
+const refreshPayloadSchema = z.object({
+  userId: z.string().min(1),
+  tenantId: z.string().min(1),
+  jwtVersion: z.number().int(),
+});
 
 class AuthService {
   async login(email: string, password: string) {
@@ -19,19 +27,19 @@ class AuthService {
 
     if (!user || !user.isActive) {
       logger.warn(`Login attempt failed for email: ${email}`);
-      throw new Error('Invalid credentials');
+      throw new UnauthorizedError();
     }
 
     // SUPER_ADMIN peut toujours se connecter, même si son tenant est désactivé
     if (user.role !== 'SUPER_ADMIN' && !user.tenant.isActive) {
       logger.warn(`Tenant inactive for user: ${email}`);
-      throw new Error('Invalid credentials');
+      throw new UnauthorizedError();
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
     if (!isPasswordValid) {
       logger.warn(`Invalid password for user: ${email}`);
-      throw new Error('Invalid credentials');
+      throw new UnauthorizedError();
     }
 
     const accessToken = this.generateAccessToken(user.id, user.tenantId, user.role, user.jwtVersion);
@@ -51,28 +59,34 @@ class AuthService {
     };
   }
 
-  async refreshToken(refreshToken: string) {
-    try {
-      const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!) as TokenPayload;
-      const user = await prisma.user.findUnique({
-        where: { id: decoded.userId },
-        include: { tenant: { select: { isActive: true } } },
-      });
-      if (!user || !user.isActive) {
-        throw new Error('Invalid refresh token');
-      }
-      // SUPER_ADMIN exempté de la vérification du tenant
-      if (user.role !== 'SUPER_ADMIN' && !user.tenant.isActive) {
-        throw new Error('Invalid refresh token');
-      }
-      if (user.jwtVersion !== decoded.jwtVersion) {
-        throw new Error('Invalid refresh token');
-      }
-      const accessToken = this.generateAccessToken(user.id, user.tenantId, user.role, user.jwtVersion);
-      return { accessToken };
-    } catch (error) {
-      throw new Error('Invalid refresh token');
+  async refreshToken(refreshToken: unknown): Promise<{ accessToken: string }> {
+    if (typeof refreshToken !== 'string' || !refreshToken) {
+      throw new UnauthorizedError();
     }
+
+    let payload: unknown;
+    try {
+      payload = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!, { algorithms: ['HS256'] });
+    } catch {
+      throw new UnauthorizedError();
+    }
+
+    const decoded = refreshPayloadSchema.safeParse(payload);
+    if (!decoded.success) {
+      throw new UnauthorizedError();
+    }
+
+    const { userId, tenantId, jwtVersion } = decoded.data;
+    const user = await prisma.user.findUnique({
+      where: { id: userId, tenantId },
+      select: { id: true, tenantId: true, role: true, jwtVersion: true, isActive: true, tenant: { select: { isActive: true } } },
+    });
+    if (!user || !user.isActive || user.jwtVersion !== jwtVersion ||
+      (user.role !== 'SUPER_ADMIN' && !user.tenant.isActive)) {
+      throw new UnauthorizedError();
+    }
+
+    return { accessToken: this.generateAccessToken(user.id, user.tenantId, user.role, user.jwtVersion) };
   }
 
   async logout(userId: string) {

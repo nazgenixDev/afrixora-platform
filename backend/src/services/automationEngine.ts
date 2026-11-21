@@ -1,5 +1,6 @@
 import { Server } from 'socket.io';
 import { prisma } from '../utils/database';
+import type { CreateAutomationInput } from '../utils/automationSchemas';
 import { publishMqtt } from './mqttWorker';
 import logger from '../utils/logger';
 
@@ -51,7 +52,7 @@ export const evaluate = async (
         };
 
         // Skip if the metric isn't in the received data
-        if (!metrics[trigger.metric]) {
+        if (typeof metrics[trigger.metric] !== 'number') {
           continue;
         }
 
@@ -89,11 +90,11 @@ export const evaluate = async (
           });
 
           // Execute the action based on its type
-          const action = rule.action as any;
+          const action = rule.action as CreateAutomationInput['action'];
           
           if (action.type === 'DEVICE_COMMAND') {
             // Send command to device via MQTT
-            publishMqtt(
+            await publishMqtt(
               `afrixora/${tenantId}/${buildingId}/devices/${action.deviceId}/commands`,
               { command: action.command, params: action.params }
             );

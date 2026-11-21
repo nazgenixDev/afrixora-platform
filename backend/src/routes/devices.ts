@@ -4,43 +4,62 @@ import { authenticate } from '../middleware/authenticate';
 import { authorize } from '../middleware/authorize';
 import { checkDeviceLimit } from '../middleware/checkLimits';
 import { validate } from '../middleware/validate';
+import { DeviceType } from '@prisma/client';
 import { z } from 'zod';
 
 const router = Router();
 
+const deviceQuerySchema = z.object({
+  query: z.object({
+    buildingId: z.string().uuid().optional(),
+    zoneId: z.string().uuid().optional(),
+    type: z.nativeEnum(DeviceType).optional(),
+    isOnline: z.enum(['true', 'false']).transform(val => val === 'true').optional(),
+    search: z.string().max(100).optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+  }),
+});
+
 const createDeviceSchema = z.object({
   body: z.object({
-    name: z.string(),
-    type: z.enum(['LIGHT', 'PLUG', 'SENSOR', 'THERMOSTAT', 'ENERGY_METER', 'DOOR_SENSOR']),
-    buildingId: z.string(),
-    zoneId: z.string().optional(),
+    name: z.string().min(1).max(100),
+    type: z.nativeEnum(DeviceType),
+    buildingId: z.string().uuid(),
+    zoneId: z.string().uuid().optional(),
     protocol: z.enum(['MQTT', 'ZIGBEE', 'WIFI']).default('MQTT'),
-  }),
+  }).strict(),
 });
 
 const updateDeviceSchema = z.object({
   body: z.object({
-    name: z.string().optional(),
-    zoneId: z.string().optional(),
-    config: z.record(z.any()).optional(),
-  }),
+    name: z.string().min(1).max(100).optional(),
+    zoneId: z.string().uuid().optional().nullable(),
+    config: z.record(z.unknown()).optional(),
+  }).strict(),
 });
 
 const controlDeviceSchema = z.object({
   body: z.object({
-    command: z.string(),
-    params: z.record(z.any()).optional(),
+    command: z.string().min(1),
+    params: z.record(z.unknown()).optional(),
   }),
 });
 
-router.get('/', authenticate, async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const devices = await deviceService.findAll(req.user!.tenantId, req.query);
-    return res.json(devices);
-  } catch (error) {
-    return next(error);
+router.get(
+  '/',
+  authenticate,
+  validate(deviceQuerySchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { page, limit, ...filters }: z.infer<typeof deviceQuerySchema>['query'] = res.locals.validatedQuery;
+      const devices = await deviceService.findAll(req.user!.tenantId, filters, { page, limit });
+      return res.json(devices);
+    } catch (error) {
+      return next(error);
+    }
   }
-});
+);
 
 router.post(
   '/',
@@ -61,7 +80,6 @@ router.post(
 router.get('/:id', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const device = await deviceService.findById(req.params.id, req.user!.tenantId);
-    if (!device) return res.status(404).json({ error: 'Device not found' });
     return res.json(device);
   } catch (error) {
     return next(error);
