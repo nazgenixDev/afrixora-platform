@@ -22,6 +22,7 @@ import { requestLogger } from './middleware/requestLogger';
 import { authenticate } from './middleware/authenticate';
 import { authenticateOrApiKey } from './middleware/authenticateOrApiKey';
 import { apiKeyAuth } from './middleware/apiKeyAuth';
+import { allowedOrigins, enforceOrigin } from './middleware/enforceOrigin';
 
 export function createApp(trustProxyHops: number) {
   const app = express();
@@ -29,11 +30,12 @@ export function createApp(trustProxyHops: number) {
   app.use(helmet());
   app.set('trust proxy', trustProxyHops);
   app.use(cors({
-    origin: process.env.CORS_ORIGINS?.split(',') || 'http://localhost:3000',
+    origin: allowedOrigins(),
     credentials: true
   }));
   app.use(express.json());
   app.use(cookieParser());
+  app.use(enforceOrigin);
 
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });

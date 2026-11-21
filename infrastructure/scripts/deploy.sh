@@ -21,6 +21,18 @@ set +a
 : "${DOMAIN:?Renseignez DOMAIN dans .env}"
 : "${DB_PASSWORD:?Renseignez DB_PASSWORD dans .env}"
 : "${REDIS_PASSWORD:?Renseignez REDIS_PASSWORD dans .env}"
+: "${MQTT_API_USER:?Renseignez MQTT_API_USER dans .env}"
+
+acl_file="${MQTT_ACL_FILE:-infrastructure/docker/mosquitto.acl}"
+password_file="${MQTT_PASSWORD_FILE:-infrastructure/docker/mosquitto_passwd}"
+if [ ! -f "$acl_file" ] || ! awk -v user="$MQTT_API_USER" '$1 == "user" && $2 == user { found = 1 } END { exit !found }' "$acl_file"; then
+  echo "Préparez le fichier ACL pour le compte API et les passerelles avant de démarrer le broker." >&2
+  exit 1
+fi
+if [ -n "${MQTT_PASSWORD_FILE:-}" ] && [ ! -f "$password_file" ]; then
+  echo "Le fichier de mots de passe Mosquitto préparé est introuvable." >&2
+  exit 1
+fi
 
 retention_days="${RETENTION_DAYS:-365}"
 if [[ ! "$retention_days" =~ ^[1-9][0-9]*$ ]]; then
@@ -46,9 +58,7 @@ fi
 echo "Construction des images applicatives..."
 docker compose build
 
-password_file=infrastructure/docker/mosquitto_passwd
 if [ ! -f "$password_file" ]; then
-  : "${MQTT_API_USER:?Renseignez MQTT_API_USER dans .env}"
   : "${MQTT_API_PASSWORD:?Renseignez MQTT_API_PASSWORD dans .env}"
 
   echo "Création du fichier de mots de passe Mosquitto..."

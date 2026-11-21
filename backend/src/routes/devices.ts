@@ -40,10 +40,15 @@ const updateDeviceSchema = z.object({
 });
 
 const controlDeviceSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
   body: z.object({
-    command: z.string().min(1),
-    params: z.record(z.unknown()).optional(),
-  }),
+    command: z.literal('set_state'),
+    params: z.object({ state: z.enum(['on', 'off']) }).strict(),
+  }).strict(),
+});
+
+const commandQuerySchema = z.object({
+  params: z.object({ id: z.string().uuid(), commandId: z.string().uuid() }),
 });
 
 router.get(
@@ -122,12 +127,25 @@ router.post(
   validate(controlDeviceSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const result = await deviceService.control(req.params.id, { command: req.body.command, params: req.body.params }, req.user!.tenantId);
-      return res.json(result);
+      const command: z.infer<typeof controlDeviceSchema>['body'] = res.locals.validatedBody;
+      const { tenantId, userId } = req.user!;
+      const result = await deviceService.control(req.params.id, command, tenantId, { requestedByUserId: userId });
+      return res.status(202).json(result);
     } catch (error) {
       return next(error);
     }
   }
+);
+
+router.get('/:id/commands/:commandId', authenticate, validate(commandQuerySchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await deviceService.getCommand(req.params.id, req.params.commandId, req.user!.tenantId);
+      return res.json(result);
+    } catch (error) {
+      return next(error);
+    }
+  },
 );
 
 router.get('/:id/history', authenticate, async (req: Request, res: Response, next: NextFunction) => {

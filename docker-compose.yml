@@ -62,7 +62,18 @@ services:
       - afrixora_mosquitto_data:/mosquitto/data
       - afrixora_mosquitto_log:/mosquitto/log
       - ./infrastructure/docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ./infrastructure/docker/mosquitto_passwd:/mosquitto/config/passwd:ro
+      - type: bind
+        source: ${MQTT_PASSWORD_FILE:-./infrastructure/docker/mosquitto_passwd}
+        target: /mosquitto/config/passwd
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MQTT_ACL_FILE:-./infrastructure/docker/mosquitto.acl}
+        target: /mosquitto/config/acl
+        read_only: true
+        bind:
+          create_host_path: false
     networks:
       - afrixora_net
 
@@ -84,9 +95,11 @@ services:
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
       - JWT_REFRESH_EXPIRES_IN=${JWT_REFRESH_EXPIRES_IN}
-      - MQTT_URL=mqtt://mosquitto:1883
+      - MQTT_URL=${MQTT_URL:-mqtt://mosquitto:1883}
       - MQTT_API_USER=${MQTT_API_USER}
       - MQTT_API_PASSWORD=${MQTT_API_PASSWORD}
+      - AFRIXORA_DEVICE_CONTROL_ENABLED=${AFRIXORA_DEVICE_CONTROL_ENABLED:-false}
+      - AFRIXORA_AUTOMATION_COMMANDS_ENABLED=${AFRIXORA_AUTOMATION_COMMANDS_ENABLED:-false}
       - RESEND_API_KEY=${RESEND_API_KEY}
       - DOMAIN=${DOMAIN}
       - CORS_ORIGINS=${CORS_ORIGINS}
@@ -114,6 +127,7 @@ services:
       context: ./frontend
       args:
         NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://api.${DOMAIN}}"
+        NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED: "${NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED:-false}"
     restart: unless-stopped
     deploy:
       resources:

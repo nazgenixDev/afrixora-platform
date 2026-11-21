@@ -58,8 +58,7 @@ const AutomationsPage = () => {
   const [triggerOperator, setTriggerOperator] = useState("gt");
   const [triggerValue, setTriggerValue] = useState(100);
   const [actionType, setActionType] = useState<"DEVICE_COMMAND" | "SEND_ALERT">("SEND_ALERT");
-  const [actionCommand, setActionCommand] = useState("set_state");
-  const [actionParams, setActionParams] = useState('{"state":"off"}');
+  const [actionState, setActionState] = useState<"on" | "off">("off");
   const [actionSeverity, setActionSeverity] = useState("WARNING");
   const [actionMessage, setActionMessage] = useState("");
   const [selectedDevices, setSelectedDevices] = useState<any[]>([]);
@@ -124,8 +123,8 @@ const AutomationsPage = () => {
             ? {
                 type: "DEVICE_COMMAND",
                 deviceId: triggerDeviceId,
-                command: actionCommand,
-                params: JSON.parse(actionParams || "{}"),
+                command: "set_state",
+                params: { state: actionState },
               }
             : {
                 type: "SEND_ALERT",
@@ -150,8 +149,7 @@ const AutomationsPage = () => {
     setTriggerOperator("gt");
     setTriggerValue(100);
     setActionType("SEND_ALERT");
-    setActionCommand("set_state");
-    setActionParams('{"state":"off"}');
+    setActionState("off");
     setActionSeverity("WARNING");
     setActionMessage("");
   };
@@ -232,7 +230,16 @@ const AutomationsPage = () => {
                   <div><Label>Bâtiment</Label><Select value={formBuildingId} onValueChange={setFormBuildingId}><SelectTrigger><SelectValue placeholder="Sélectionner un bâtiment" /></SelectTrigger><SelectContent>{buildings.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent></Select></div>
                 </div>
                 <div className="border-t pt-4"><h3 className="text-sm font-semibold mb-3">Déclencheur (SI)</h3><div className="grid grid-cols-1 sm:grid-cols-3 gap-3"><div><Label>Appareil</Label><Select value={triggerDeviceId} onValueChange={setTriggerDeviceId}><SelectTrigger><SelectValue placeholder="Choisir un appareil" /></SelectTrigger><SelectContent>{selectedDevices.map(d => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}</SelectContent></Select></div><div><Label>Métrique</Label><Select value={triggerMetric} onValueChange={setTriggerMetric}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="power_w">Power (W)</SelectItem><SelectItem value="temp_c">Température (°C)</SelectItem><SelectItem value="motion">Mouvement</SelectItem><SelectItem value="state">État</SelectItem></SelectContent></Select></div><div><Label>Opérateur & Valeur</Label><div className="flex gap-2"><Select value={triggerOperator} onValueChange={setTriggerOperator}><SelectTrigger className="w-20"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="gt">&gt;</SelectItem><SelectItem value="lt">&lt;</SelectItem><SelectItem value="eq">=</SelectItem><SelectItem value="gte">≥</SelectItem><SelectItem value="lte">≤</SelectItem></SelectContent></Select><Input type="number" value={triggerValue} onChange={e => setTriggerValue(Number(e.target.value))} className="flex-1" /></div></div></div></div>
-                <div className="border-t pt-4"><h3 className="text-sm font-semibold mb-3">Action (ALORS)</h3><div className="space-y-3"><div><Label>Type d&apos;action</Label><Select value={actionType} onValueChange={e => setActionType(e as any)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="DEVICE_COMMAND">Commande appareil</SelectItem><SelectItem value="SEND_ALERT">Envoyer une alerte</SelectItem></SelectContent></Select></div>{actionType === "DEVICE_COMMAND" && <><div><Label>Commande</Label><Select value={actionCommand} onValueChange={setActionCommand}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="set_state">set_state</SelectItem><SelectItem value="turn_on">turn_on</SelectItem><SelectItem value="turn_off">turn_off</SelectItem></SelectContent></Select></div><div><Label>Paramètres (JSON)</Label><Input value={actionParams} onChange={e => setActionParams(e.target.value)} placeholder='{"state":"on"}' /></div></>}{actionType === "SEND_ALERT" && <><div><Label>Sévérité</Label><Select value={actionSeverity} onValueChange={setActionSeverity}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="INFO">INFO</SelectItem><SelectItem value="WARNING">WARNING</SelectItem><SelectItem value="CRITICAL">CRITICAL</SelectItem></SelectContent></Select></div><div><Label>Message</Label><Input value={actionMessage} onChange={e => setActionMessage(e.target.value)} placeholder="Message d'alerte" /></div></>}</div></div>
+                <div className="border-t pt-4"><h3 className="text-sm font-semibold mb-3">Action (ALORS)</h3><div className="space-y-3"><div><Label>Type d&apos;action</Label><Select value={actionType} onValueChange={e => setActionType(e as any)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="DEVICE_COMMAND">Commande appareil</SelectItem><SelectItem value="SEND_ALERT">Envoyer une alerte</SelectItem></SelectContent></Select></div>{actionType === "DEVICE_COMMAND" && <><div>
+                  <Label>État demandé</Label>
+                  <Select value={actionState} onValueChange={(state: "on" | "off") => setActionState(state)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="on">Allumer</SelectItem>
+                      <SelectItem value="off">Éteindre</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div></>}{actionType === "SEND_ALERT" && <><div><Label>Sévérité</Label><Select value={actionSeverity} onValueChange={setActionSeverity}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="INFO">INFO</SelectItem><SelectItem value="WARNING">WARNING</SelectItem><SelectItem value="CRITICAL">CRITICAL</SelectItem></SelectContent></Select></div><div><Label>Message</Label><Input value={actionMessage} onChange={e => setActionMessage(e.target.value)} placeholder="Message d'alerte" /></div></>}</div></div>
                 <div className="flex justify-end gap-2 pt-4 border-t"><Button variant="outline" onClick={() => setShowNewRule(false)}>Annuler</Button><Button onClick={createAutomation} disabled={!formName || !formBuildingId}>Créer</Button></div>
               </CardContent>
             </Card>

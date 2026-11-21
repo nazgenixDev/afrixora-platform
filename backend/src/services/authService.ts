@@ -19,44 +19,44 @@ const refreshPayloadSchema = z.object({
 });
 
 class AuthService {
-  async login(email: string, password: string) {
+  private async authenticateUser(email: string, password: string) {
     const user = await prisma.user.findUnique({
       where: { email },
       include: { tenant: { select: { isActive: true } } },
     });
 
     if (!user || !user.isActive) {
-      logger.warn(`Login attempt failed for email: ${email}`);
+      logger.warn('auth.login_refused', { reason: 'account_unavailable' });
       throw new UnauthorizedError();
     }
 
     // SUPER_ADMIN peut toujours se connecter, même si son tenant est désactivé
     if (user.role !== 'SUPER_ADMIN' && !user.tenant.isActive) {
-      logger.warn(`Tenant inactive for user: ${email}`);
+      logger.warn('auth.login_refused', { reason: 'tenant_inactive', userId: user.id });
       throw new UnauthorizedError();
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
     if (!isPasswordValid) {
-      logger.warn(`Invalid password for user: ${email}`);
+      logger.warn('auth.login_refused', { reason: 'invalid_password', userId: user.id });
       throw new UnauthorizedError();
     }
 
-    const accessToken = this.generateAccessToken(user.id, user.tenantId, user.role, user.jwtVersion);
-    const refreshToken = this.generateRefreshToken(user.id, user.tenantId, user.role, user.jwtVersion);
+    return { id: user.id, email: user.email, name: user.name, role: user.role, tenantId: user.tenantId, jwtVersion: user.jwtVersion };
+  }
 
-    logger.info(`User logged in: ${user.id}`);
-    return {
-      accessToken,
-      refreshToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        tenantId: user.tenantId,
-      },
-    };
+  async issueAccessToken(email: string, password: string) {
+    const { jwtVersion, ...user } = await this.authenticateUser(email, password);
+    const accessToken = this.generateAccessToken(user.id, user.tenantId, user.role, jwtVersion);
+    return { accessToken, user, jwtVersion };
+  }
+
+  async login(email: string, password: string) {
+    const { user, accessToken, jwtVersion } = await this.issueAccessToken(email, password);
+    const refreshToken = this.generateRefreshToken(user.id, user.tenantId, user.role, jwtVersion);
+
+    logger.info('auth.browser_session_opened', { userId: user.id });
+    return { accessToken, refreshToken, user };
   }
 
   async refreshToken(refreshToken: unknown): Promise<{ accessToken: string }> {

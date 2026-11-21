@@ -284,7 +284,8 @@ CREATE INDEX ON sensor_readings (tenant_id, time DESC);
 6. REST API — Complete Endpoints
 Authentication
 Method	Endpoint	Description
-POST	/auth/login	Pose les cookies `access_token` et `refresh_token`, renvoie `{ user, accessToken }`
+POST	/auth/login	Pose les cookies `access_token` et `refresh_token` et renvoie `{ user }`. Le champ JSON `accessToken` est réservé au développement.
+POST	/auth/token	Renvoie `{ user, accessToken }` aux clients hors navigateur, sans cookie.
 POST	/auth/refresh	Vérifie le cookie `refresh_token` et renouvelle `access_token`
 GET	/auth/me	Renvoie le profil courant sous la forme `{ user }`
 POST	/auth/logout	Incrémente `jwtVersion` et efface les deux cookies
@@ -426,10 +427,11 @@ Settings page available to all authenticated users
 
 Authentification après le lot P0
 
-- `POST /auth/login` pose `access_token` (15 minutes) et `refresh_token` (7 jours) dans des cookies `HttpOnly` et `SameSite=Lax`, avec `Secure` en production. Le JSON de connexion contient également `accessToken`. En développement uniquement, le frontend conserve cette valeur dans `localStorage` sous `afrixora_token` et l’envoie dans `Authorization: Bearer …`.
-- `authenticate.ts` privilégie le cookie d’accès, puis lit le Bearer en son absence. Il vérifie la signature, l’activité de l’utilisateur, sa `jwtVersion` et l’activité du tenant, avec une exception sur l’activité du tenant pour `SUPER_ADMIN`. Les routes montées avec `authenticateOrApiKey` exigent actuellement un en-tête Bearer ou `x-api-key` pour sélectionner leur middleware, même lorsque le cookie est présent.
+- `POST /auth/login` pose `access_token` (15 minutes) et `refresh_token` (7 jours) dans des cookies `HttpOnly` et `SameSite=Lax`, avec `Secure` en production. Le JSON de connexion contient `accessToken` uniquement en développement. Le frontend conserve alors cette valeur dans `localStorage` sous `afrixora_token` et l’envoie dans `Authorization: Bearer …`.
+- `authenticate.ts` privilégie le cookie d’accès, puis lit le Bearer en son absence. Il vérifie la signature, l’activité de l’utilisateur, sa `jwtVersion` et l’activité du tenant, avec une exception sur l’activité du tenant pour `SUPER_ADMIN`. Les routes montées avec `authenticateOrApiKey` acceptent le cookie, un jeton Bearer ou une clé API autorisée.
 - Pour un JWT valide de `SUPER_ADMIN`, `authenticate.ts` accepte actuellement `x-tenant-id` comme tenant courant de la requête sans vérifier l’existence du tenant demandé. Les routes compatibles avec les clés API utilisent le tenant associé à la clé vérifiée.
 - Au chargement du tableau de bord, le frontend récupère le profil via `GET /api/v1/auth/me`. Axios utilise `withCredentials`. Après un 401 hors connexion et rafraîchissement, l’intercepteur tente une fois `POST /api/v1/auth/refresh`, puis rejoue la requête initiale. Si le rafraîchissement échoue ou que la requête rejouée renvoie 401, il redirige vers `/login`.
+- Les clients hors navigateur obtiennent leur jeton de 15 minutes via `POST /api/v1/auth/token`, puis envoient `Authorization: Bearer …`. Une intégration qui lisait le champ JSON de `/auth/login` peut utiliser cette route avec les mêmes identifiants.
 - Le rafraîchissement vérifie la signature et la session associée au cookie `refresh_token`, puis pose un nouveau cookie d’accès. En développement, le JSON du rafraîchissement fournit aussi `accessToken` pour mettre à jour le repli local. Un mauvais identifiant à la connexion ou un jeton de rafraîchissement invalide produit une erreur 401 `INVALID_CREDENTIALS` avec le message générique « Identifiants invalides ».
 - La connexion est limitée à 10 tentatives par IP sur 15 minutes en production et à 100 hors production. Le rafraîchissement a sa propre limite de 30 tentatives par IP sur 15 minutes. Les limiteurs et le journal des requêtes utilisent `req.ip`. `TRUST_PROXY_HOPS` vaut 1 par défaut. Pour la chaîne Cloudflare Tunnel → Traefik → API, il faut valider en déploiement si la valeur 2 correspond au trajet réel.
 

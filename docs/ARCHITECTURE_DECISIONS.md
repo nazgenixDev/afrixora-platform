@@ -15,15 +15,16 @@
 - Production cible : domaine unique via Cloudflare Tunnel + Traefik.
 
 **Détail** :
-- `POST /auth/login` → backend pose `access_token` (15 min) et `refresh_token` (7 jours) en cookies `httpOnly`.
+- `POST /auth/login` pose `access_token` (15 min) et `refresh_token` (7 jours) en cookies `HttpOnly`.
+- `POST /auth/token` émet un Bearer de 15 minutes pour les clients hors navigateur, sans ouvrir de session cookie.
 - Middleware `authenticate.ts` lit le cookie ou le header `Authorization` (fallback API keys).
-- En développement cross-port (`localhost:3000` → `localhost:4000`), le navigateur bloque le cookie `SameSite=Lax`. Solution temporaire : le backend renvoie aussi `accessToken` dans le JSON, stocké dans `localStorage` et envoyé en header `Authorization`.
+- En développement, le frontend utilise les cookies et autorise un repli sur `accessToken` fourni dans le JSON et envoyé en header `Authorization`.
 - Socket.IO lit au handshake le cookie `access_token` en priorité ; en développement cross-port, le client peut utiliser `auth.token` si le jeton local est disponible.
 - Le handshake exige un JWT signé et une session valide en base : utilisateur actif, `jwtVersion` identique et tenant actif, sauf pour `SUPER_ADMIN`.
 - `join:building` valide l’UUID et n’autorise que les bâtiments du tenant authentifié ; `SUPER_ADMIN` peut rejoindre tout bâtiment existant.
 
 **Conséquences** :
-- En production (même domaine), seul le cookie est utilisé.
+- En production, le navigateur utilise les cookies de session. Les clients hors navigateur peuvent utiliser le Bearer issu de `/auth/token`.
 - Le refresh token est renouvelé via `POST /auth/refresh` (cookie `refresh_token`).
 - Logout → `jwtVersion++` dans la DB, cookie clear.
 

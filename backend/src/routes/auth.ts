@@ -58,20 +58,33 @@ const REFRESH_COOKIE_OPTIONS = {
  */
 router.post('/login', loginLimiter, validate(loginSchema), async (req, res, next) => {
   try {
-    const { email, password } = req.body;
+    const { email, password }: z.infer<typeof loginSchema>['body'] = res.locals.validatedBody;
     const result = await authService.login(email, password);
 
     // Set httpOnly cookies
     res.cookie('access_token', result.accessToken, ACCESS_COOKIE_OPTIONS);
     res.cookie('refresh_token', result.refreshToken, REFRESH_COOKIE_OPTIONS);
 
-    logger.info(`User logged in: ${email}`);
-
-    // Renvoyer l'utilisateur ET le token (cookie httpOnly + fallback localStorage pour dev cross-port)
-    return res.json({
+    // Le navigateur utilise le cookie HttpOnly. Le jeton JSON sert au développement.
+    return res.set('Cache-Control', 'no-store').json({
       user: result.user,
-      accessToken: result.accessToken,
+      ...(process.env.NODE_ENV === 'development' ? { accessToken: result.accessToken } : {}),
     });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// Les clients hors navigateur utilisent un jeton Bearer sans session cookie.
+router.post('/token', loginLimiter, validate(loginSchema), async (req, res, next) => {
+  if (req.get('Origin') !== undefined || req.get('Sec-Fetch-Site') !== undefined ||
+      req.cookies?.access_token || req.cookies?.refresh_token) {
+    return res.status(403).json({ error: 'Route réservée aux clients hors navigateur', code: 'BEARER_CLIENT_REQUIRED' });
+  }
+  try {
+    const { email, password }: z.infer<typeof loginSchema>['body'] = res.locals.validatedBody;
+    const { accessToken, user } = await authService.issueAccessToken(email, password);
+    return res.set('Cache-Control', 'no-store').json({ accessToken, user });
   } catch (error) {
     return next(error);
   }

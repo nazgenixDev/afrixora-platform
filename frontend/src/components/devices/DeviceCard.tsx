@@ -3,30 +3,30 @@ import React, { useState } from 'react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { Device } from '@/store';
+import useStore from '@/store';
+import type { Device } from '@/types';
+import { getReportedDeviceState } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import api from '@/lib/api';
 
 interface DeviceCardProps {
   device: Device;
-  onToggle?: (deviceId: string, newState: boolean) => void;
+  onCommandAccepted?: (deviceId: string) => void;
   className?: string;
 }
 
 const DeviceCard: React.FC<DeviceCardProps> = ({
   device,
-  onToggle,
+  onCommandAccepted,
   className,
 }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isOn, setIsOn] = useState(() => {
-    // Initialize from device state if available
-    if (typeof device.config === 'object' && device.config !== null) {
-      const config = device.config as Record<string, unknown>;
-      return config.state === 'on';
-    }
-    return false;
-  });
+  const state = getReportedDeviceState(device);
+  const user = useStore(store => store.user);
+  const canControl = Boolean(user && user.role !== 'VIEWER' && device.isOnline &&
+    process.env.NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED === 'true');
+  const isToggleable = ['LIGHT', 'PLUG'].includes(device.type);
 
   const getDeviceTypeIcon = (type: string): React.ReactNode => {
     switch (type) {
@@ -159,40 +159,24 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
   };
 
   const handleToggle = async (checked: boolean) => {
-    if (!device.isOnline) return;
-    
+    if (!canControl || !isToggleable || isLoading) return;
+
     setIsLoading(true);
     setError(null);
-    
+
     try {
-      // Only LIGHT and PLUG devices can be toggled
-      if (['LIGHT', 'PLUG'].includes(device.type)) {
-        const newState = checked ? 'on' : 'off';
-        
-        // Call the API to control the device
-        await api.post(`/api/v1/devices/${device.id}/control`, {
-          command: 'set_state',
-          params: { state: newState }
-        });
-        
-        setIsOn(checked);
-        
-        // Call the onToggle callback if provided
-        if (onToggle) {
-          onToggle(device.id, checked);
-        }
-      }
+      await api.post(`/api/v1/devices/${device.id}/control`, {
+        command: 'set_state',
+        params: { state: checked ? 'on' : 'off' },
+      });
+      onCommandAccepted?.(device.id);
     } catch (err) {
-      logger.error('Error toggling device:', err);
-      setError('Failed to control device');
-      // Revert the switch state on error
-      setIsOn(!checked);
+      logger.error('Impossible de transmettre la commande', err);
+      setError('Impossible de transmettre la commande.');
     } finally {
       setIsLoading(false);
     }
   };
-
-  const isToggleable = ['LIGHT', 'PLUG'].includes(device.type);
 
   return (
     <Card className={`overflow-hidden ${className}`}>
@@ -240,18 +224,25 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
       <CardFooter className="pt-2">
         <div className="flex justify-between items-center w-full">
           <span className="text-sm font-medium">
-            {isToggleable ? (isOn ? 'Allumé' : 'Éteint') : 'État'}
+            {isToggleable ? (state === 'on' ? 'Allumé (déclaré)' : state === 'off' ? 'Éteint (déclaré)' : 'État inconnu') : 'Connectivité'}
           </span>
           {isToggleable ? (
-            <Switch
-              checked={isOn}
-              onCheckedChange={handleToggle}
-              disabled={!device.isOnline || isLoading}
-              className={isLoading ? 'opacity-50' : ''}
-            />
+            state !== null ? (
+              <Switch
+                aria-label={`Commander ${device.name}`}
+                checked={state === 'on'}
+                onCheckedChange={handleToggle}
+                disabled={!canControl || isLoading}
+              />
+            ) : canControl && (
+              <div className="flex gap-1">
+                <Button variant="outline" size="sm" disabled={isLoading} onClick={() => handleToggle(true)}>Allumer</Button>
+                <Button variant="outline" size="sm" disabled={isLoading} onClick={() => handleToggle(false)}>Éteindre</Button>
+              </div>
+            )
           ) : (
             <Badge variant="outline">
-              {device.isOnline ? 'Actif' : 'Inactif'}
+              {device.isOnline ? 'En ligne' : 'Hors ligne'}
             </Badge>
           )}
         </div>

@@ -13,7 +13,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import api from "@/lib/api";
 import logger from "@/lib/logger";
 import useStore from "@/store";
+import { toast } from "sonner";
 import { usePaginatedList } from "@/hooks/usePaginatedList";
+import { getReportedDeviceState } from "@/lib/utils";
 import type { Device, Building, PaginatedResponse, Zone } from "@/types";
 import { Zap, Wifi, WifiOff, Power, PowerOff, Search, LayoutGrid, List, Plus, Eye, Cpu, Loader2 } from "lucide-react";
 
@@ -132,14 +134,13 @@ const DevicesPage = () => {
   if (search.trim()) filters.set("search", search.trim());
   if (filterType) filters.set("type", filterType);
   if (filterStatus) filters.set("isOnline", String(filterStatus === "online"));
-  const { result, loading, error, setPage, reload, updateItems } =
+  const { result, loading, error, setPage, reload } =
     usePaginatedList<Device>("/api/v1/devices", filters.toString());
   const devices = result?.data ?? [];
 
-  const updateDevice = useStore(state => state.updateDevice);
   const user = useStore(state => state.user);
   const canEdit = user && ['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN'].includes(user.role);
-  const canControl = user && user.role !== 'VIEWER';
+  const canControl = Boolean(user && user.role !== 'VIEWER' && process.env.NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED === 'true');
 
   useEffect(() => {
     const controller = new AbortController();
@@ -168,27 +169,25 @@ const DevicesPage = () => {
   };
 
   const toggleDevice = async (id: string, newState: boolean) => {
+    if (!canControl) return;
     try {
       await api.post(`/api/v1/devices/${id}/control`, {
-        command: 'set_state',
-        params: { state: newState ? 'on' : 'off' }
+        command: 'set_state', params: { state: newState ? 'on' : 'off' },
       });
-      updateItems(prev => prev.map(d => d.id === id ? { ...d, config: { ...d.config, state: newState ? 'on' : 'off' } } : d));
-      updateDevice(id, { config: { state: newState ? 'on' : 'off' } } as any);
+      toast.info('Commande acceptée. Consultez son état déclaré après actualisation.');
     } catch (err) {
       logger.error(String(err));
+      toast.error('Impossible de transmettre la commande.');
     }
   };
 
   const bulkToggle = async (state: boolean) => {
-    const cmd = state ? 'on' : 'off';
-    await Promise.all(
-      Array.from(selectedIds).map(id =>
-        api.post(`/api/v1/devices/${id}/control`, { command: 'set_state', params: { state: cmd } })
-      )
-    );
-    updateItems(prev => prev.map(d => selectedIds.has(d.id) ? { ...d, config: { ...d.config, state: cmd } } : d));
-    selectedIds.forEach(id => updateDevice(id, { config: { state: cmd } } as any));
+    if (!canControl) return;
+    const responses = await Promise.allSettled(Array.from(selectedIds).map(id =>
+      api.post(`/api/v1/devices/${id}/control`, { command: 'set_state', params: { state: state ? 'on' : 'off' } })
+    ));
+    const accepted = responses.filter(r => r.status === 'fulfilled').length;
+    toast.info(`${accepted}/${responses.length} commandes acceptées.`);
   };
 
   const handleBuildingChange = (buildingId: string) => {
@@ -197,11 +196,41 @@ const DevicesPage = () => {
     setSelectedBuildingId(buildingId);
   };
 
+  const renderDeviceControl = (device: Device) => {
+    const state = getReportedDeviceState(device);
+    const disabled = !canControl || !device.isOnline;
+    if (state === null) {
+      return (
+        <div className="flex flex-wrap items-center gap-1" onClick={event => event.stopPropagation()}>
+          <span className="text-xs text-muted-foreground">État inconnu</span>
+          {!disabled && (
+            <>
+              <Button variant="outline" size="sm" onClick={() => toggleDevice(device.id, true)}>Allumer</Button>
+              <Button variant="outline" size="sm" onClick={() => toggleDevice(device.id, false)}>Éteindre</Button>
+            </>
+          )}
+        </div>
+      );
+    }
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-muted-foreground">{state === "on" ? "Allumé (déclaré)" : "Éteint (déclaré)"}</span>
+        <Switch
+          aria-label={`Commander ${device.name}`}
+          checked={state === "on"}
+          disabled={disabled}
+          onCheckedChange={checked => toggleDevice(device.id, checked)}
+          onClick={event => event.stopPropagation()}
+        />
+      </div>
+    );
+  };
+
   const stats = {
     total: result?.total ?? 0,
     online: devices.filter(d => d.isOnline).length,
     offline: devices.filter(d => !d.isOnline).length,
-    active: devices.filter(d => d.config?.state === 'on' || d.config?.power === 'on').length,
+    active: devices.filter(d => getReportedDeviceState(d) === 'on').length,
     power: "—",
   };
 
@@ -227,8 +256,8 @@ const DevicesPage = () => {
         </div>
         {selectedIds.size > 0 && (
           <div className="flex gap-1">
-            <Button variant="outline" size="sm" onClick={() => bulkToggle(true)}>Allumer</Button>
-            <Button variant="outline" size="sm" onClick={() => bulkToggle(false)}>Éteindre</Button>
+            <Button variant="outline" size="sm" disabled={!canControl} onClick={() => bulkToggle(true)}>Allumer</Button>
+            <Button variant="outline" size="sm" disabled={!canControl} onClick={() => bulkToggle(false)}>Éteindre</Button>
           </div>
         )}
         {/* CORRECTION : ajout de l'accolade fermante après </Button> */}
@@ -245,7 +274,7 @@ const DevicesPage = () => {
             <div>
               <div className="text-lg font-bold">{val}</div>
               <div className="text-xs text-muted-foreground">
-                {key === 'total' ? 'Total' : key === 'online' ? 'En ligne (page)' : key === 'offline' ? 'Hors ligne (page)' : key === 'active' ? 'Actifs (page)' : 'Puissance'}
+                {key === 'total' ? 'Total' : key === 'online' ? 'En ligne (page)' : key === 'offline' ? 'Hors ligne (page)' : key === 'active' ? 'Allumés déclarés (page)' : 'Puissance'}
               </div>
             </div>
           </div>
@@ -285,7 +314,7 @@ const DevicesPage = () => {
                   <td className="p-3"><Badge className={TYPE_BADGES[d.type] || ""}>{TYPE_LABELS[d.type] || d.type}</Badge></td>
                   <td className="p-3 text-muted-foreground">{d.zone?.name || "—"}</td>
                   <td className="p-3"><Badge variant={d.isOnline ? "default" : "destructive"} className="text-xs">{d.isOnline ? "En ligne" : "Hors ligne"}</Badge></td>
-                  <td className="p-3"><Switch checked={d.config?.state === 'on' || d.config?.power === 'on'} onCheckedChange={checked => toggleDevice(d.id, checked)} onClick={e => e.stopPropagation()} /></td>
+                  <td className="p-3">{renderDeviceControl(d)}</td>
                   <td className="p-3">
                     <div className="flex gap-1 opacity-0 hover:opacity-100 transition-opacity">
                       <Button variant="ghost" size="icon" onClick={e => { e.stopPropagation(); setDrawerDevice(d); }}>⋯</Button>
@@ -299,10 +328,10 @@ const DevicesPage = () => {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
           {devices.map(d => (
-            <Card key={d.id} className={`p-4 cursor-pointer hover:shadow-md transition-shadow ${d.config?.state === "on" ? "border-emerald-500/30 bg-emerald-500/5" : ""}`} onClick={() => setDrawerDevice(d)}>
+            <Card key={d.id} className={`p-4 cursor-pointer hover:shadow-md transition-shadow ${getReportedDeviceState(d) === "on" ? "border-emerald-500/30 bg-emerald-500/5" : ""}`} onClick={() => setDrawerDevice(d)}>
               <div className="flex items-center justify-between mb-3">
                 <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-500 font-bold text-xs">{d.type[0]}</div>
-                <Switch checked={d.config?.state === 'on' || d.config?.power === 'on'} onCheckedChange={checked => toggleDevice(d.id, checked)} onClick={e => e.stopPropagation()} />
+                {renderDeviceControl(d)}
               </div>
               <div className="font-medium truncate">{d.name}</div>
               <div className="text-xs text-muted-foreground">{d.zone?.name || "—"} · {d.isOnline ? <span className="text-emerald-400">En ligne</span> : <span className="text-red-400">Hors ligne</span>}</div>
@@ -327,7 +356,7 @@ const DevicesPage = () => {
               <div><span className="text-muted-foreground">Zone</span> <span className="float-right">{drawerDevice.zone?.name || "—"}</span></div>
               <div><span className="text-muted-foreground">Statut</span> <span className={`float-right ${drawerDevice.isOnline ? "text-emerald-400" : "text-red-400"}`}>{drawerDevice.isOnline ? "En ligne" : "Hors ligne"}</span></div>
               <div><span className="text-muted-foreground">Protocole</span> <span className="float-right">{drawerDevice.protocol}</span></div>
-              <div><span className="text-muted-foreground">État</span> <span className="float-right font-bold">{drawerDevice.config?.state === 'on' ? "Allumé" : "Éteint"}</span></div>
+              <div><span className="text-muted-foreground">État déclaré par le boîtier</span> <span className="float-right font-bold">{getReportedDeviceState(drawerDevice) === 'on' ? "Allumé" : getReportedDeviceState(drawerDevice) === 'off' ? "Éteint" : "État inconnu"}</span></div>
               <div><span className="text-muted-foreground">ID</span> <span className="float-right text-xs font-mono">{drawerDevice.id}</span></div>
             </div>
           </div>

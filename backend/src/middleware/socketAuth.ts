@@ -2,6 +2,7 @@ import jwt from 'jsonwebtoken';
 import type { DefaultEventsMap, Socket } from 'socket.io';
 import { z } from 'zod';
 import { prisma } from '../utils/database';
+import { allowedOrigins } from './enforceOrigin';
 
 export interface SocketData {
   user: { userId: string; tenantId: string; role: string };
@@ -26,6 +27,8 @@ function readAccessCookie(header: string | undefined): string | undefined {
 
 export async function socketAuth(socket: AuthSocket, next: (error?: Error) => void): Promise<void> {
   try {
+    const origin = socket.handshake.headers.origin;
+    if (origin && !allowedOrigins().includes(origin)) return next(new Error('Origine refusée'));
     const cookie = readAccessCookie(socket.handshake.headers.cookie);
     const fallback: unknown = socket.handshake.auth.token;
     const token = cookie ?? fallback;

@@ -196,9 +196,11 @@ Si l’injecteur de démo est utilisé, ajouter à la copie de `passwd` un compt
 
 Après validation, tester sur un broker isolé les accès de l’API et des passerelles sur TCP et WebSocket. Vérifier notamment le refus d’une publication hors du bâtiment, du statut d’une autre passerelle et des commandes émises par une passerelle.
 
-Pour migrer en production, installer d’abord le fichier de mots de passe préparé et recréer le conteneur Mosquitto pour prendre en compte le montage. Distribuer les nouveaux identifiants et confirmer la reconnexion de chaque client. Renouveler ensuite le secret API auparavant partagé dans le fichier de mots de passe et dans la configuration de l’API. Monter le fichier ACL préparé en lecture seule sur `/mosquitto/config/acl`, activer la directive commentée dans `mosquitto.conf` et vérifier que les deux fichiers sont lisibles par Mosquitto. Recréer le broker et l’API avec les paramètres mis à jour.
+Le Compose de référence charge les ACL au démarrage. Sa version par défaut autorise uniquement le compte API de référence. Avant une migration de clients existants, renseigner `MQTT_PASSWORD_FILE` et `MQTT_ACL_FILE` avec les fichiers préparés et lisibles par Mosquitto. Vérifier que l’ACL contient le compte `MQTT_API_USER` et les comptes de toutes les passerelles inventoriées. Distribuer les nouveaux identifiants et préparer le renouvellement du secret API anciennement partagé. Garder les deux flags de commandes à `false` pendant la migration.
 
-En cas de problème avec les règles, désactiver la directive ACL et recréer le broker en conservant les nouveaux comptes. Pour revenir entièrement à l’état initial, rétablir aussi le fichier de mots de passe sauvegardé et les anciens identifiants sur les clients avant leur reconnexion.
+Les ports MQTT du Compose de référence sont internes au réseau Docker. Pour les passerelles distantes, configurer une entrée publique TLS en `wss://` via le tunnel vers le listener WebSocket interne et vérifier le certificat présenté aux clients. Si l’API utilise un broker hors du réseau Docker privé, renseigner un `MQTT_URL` en `mqtts://` ou `wss://` avec un certificat de confiance. L’API utilise MQTT 5 pour limiter la durée des publications QoS 1, et le firmware doit vérifier l’échéance absolue et l’identifiant de chaque commande avant exécution.
+
+En cas de problème, restaurer ensemble les fichiers de mots de passe et d’ACL validés précédemment, puis vérifier la reconnexion des passerelles avant de reprendre l’exploitation.
 
 ## 10. Migrer et renouveler les clés API
 

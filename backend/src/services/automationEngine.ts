@@ -1,7 +1,7 @@
 import { Server } from 'socket.io';
 import { prisma } from '../utils/database';
-import type { CreateAutomationInput } from '../utils/automationSchemas';
-import { publishMqtt } from './mqttWorker';
+import { automationDeviceState, type CreateAutomationInput } from '../utils/automationSchemas';
+import deviceService from './deviceService';
 import logger from '../utils/logger';
 
 /**
@@ -93,16 +93,17 @@ export const evaluate = async (
           const action = rule.action as CreateAutomationInput['action'];
           
           if (action.type === 'DEVICE_COMMAND') {
-            // Send command to device via MQTT
-            await publishMqtt(
-              `afrixora/${tenantId}/${buildingId}/devices/${action.deviceId}/commands`,
-              { command: action.command, params: action.params }
-            );
-            
-            logger.debug(`Published MQTT command for device ${action.deviceId}`, {
-              command: action.command,
-              params: action.params
-            });
+            if (process.env.AFRIXORA_AUTOMATION_COMMANDS_ENABLED !== 'true') {
+              logger.warn('Automated physical commands disabled', { ruleId: rule.id });
+              continue;
+            }
+            const state = automationDeviceState(action.command, action.params);
+            if (!state) {
+              logger.warn('Automation command payload rejected', { ruleId: rule.id });
+              continue;
+            }
+            await deviceService.control(action.deviceId,
+              { command: 'set_state', params: { state } }, tenantId, { origin: 'AUTOMATION', buildingId });
           } 
           else if (action.type === 'SEND_ALERT') {
             // Create alert in database
@@ -129,7 +130,7 @@ export const evaluate = async (
 
           // Update lastFiredAt timestamp
           await prisma.automation.update({
-            where: { id: rule.id },
+            where: { id: rule.id, tenantId, buildingId },
             data: { lastFiredAt: new Date() }
           });
         }

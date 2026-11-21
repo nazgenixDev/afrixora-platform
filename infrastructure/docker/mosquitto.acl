@@ -1,5 +1,5 @@
-# Modèle à copier dans l'espace de préparation de la migration.
-# Adapter ce bloc à la valeur de MQTT_API_USER avant l'activation.
+# Le compte API de référence a seulement accès aux topics utilisés par le backend.
+# Pour provisionner des passerelles, préparer une copie privée (voir DEPLOYMENT.md).
 user afrixora_api
 topic read afrixora/+/+/devices/+/readings
 topic read afrixora/+/+/devices/+/events
