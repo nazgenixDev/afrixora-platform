@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,13 +28,14 @@ interface AlertFilters {
   buildingId: string | "ALL";
 }
 
-const AlertsPage = () => {
+const TenantAlerts = ({ tenantId }: { tenantId: string }) => {
   const [buildings, setBuildings] = useState<Building[]>([]);
-  const [selectedBuilding, setSelectedBuilding] = useState<Building | null>(null);
   const [fetchedAlerts, setFetchedAlerts] = useState<Alert[]>([]);
   const [unreadCount, setUnreadCount] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [buildingsError, setBuildingsError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const [filters, setFilters] = useState<AlertFilters>({
     severity: "ALL",
     isRead: "ALL",
@@ -42,28 +44,33 @@ const AlertsPage = () => {
 
   const storeAlerts = useStore((state) => state.alerts);
   const addAlert = useStore((state) => state.addAlert);
-  const tenantId = useStore((state) => state.user?.tenantId);
   const canAcknowledge = useStore(({ user }) => !!user && user.role !== "VIEWER");
 
-  const { isConnected } = useSocket({
-    buildingId: selectedBuilding?.id,
-    enabled: !!selectedBuilding,
-  });
+  const { severity, buildingId } = filters;
+  const { isConnected, socket } = useSocket({ buildingId: buildingId === "ALL" ? undefined : buildingId });
+  const socketConnected = isConnected && socket?.connected;
 
   useEffect(() => {
+    const controller = new AbortController();
     const fetchBuildings = async (): Promise<void> => {
       try {
-        const response = await api.get<Building[] | PaginatedResponse<Building>>("/api/v1/buildings");
+        const response = await api.get<Building[] | PaginatedResponse<Building>>("/api/v1/buildings", {
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
         const raw = response.data;
-        setBuildings(Array.isArray(raw) ? raw : (raw?.data ?? []));
+        setBuildings(Array.isArray(raw) ? raw : raw.data);
+        setBuildingsError(null);
       } catch (err) {
+        if (controller.signal.aborted) return;
         logger.error("Erreur de chargement des bâtiments", err);
-        setError("Impossible de charger les bâtiments.");
+        setBuildingsError("Impossible de charger les bâtiments.");
       }
     };
 
-    fetchBuildings();
-  }, []);
+    void fetchBuildings();
+    return () => controller.abort();
+  }, [retryCount]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -80,7 +87,7 @@ const AlertsPage = () => {
           },
           signal: controller.signal,
         });
-        const data = Array.isArray(res.data) ? res.data : res.data.data ?? res.data;
+        const data = Array.isArray(res.data) ? res.data : res.data.data;
         if (!controller.signal.aborted) setFetchedAlerts(data);
       } catch (err) {
         if (controller.signal.aborted) return;
@@ -93,9 +100,8 @@ const AlertsPage = () => {
 
     void fetchAlerts();
     return () => controller.abort();
-  }, [filters, tenantId]);
+  }, [filters, retryCount]);
 
-  const { severity, buildingId } = filters;
   useEffect(() => {
     const controller = new AbortController();
     const fetchUnreadCount = async (): Promise<void> => {
@@ -123,7 +129,7 @@ const AlertsPage = () => {
 
     void fetchUnreadCount();
     return () => controller.abort();
-  }, [severity, buildingId, tenantId, storeAlerts]);
+  }, [severity, buildingId, retryCount, storeAlerts]);
 
   // Les événements Socket.IO et les confirmations de lecture enrichissent la liste HTTP.
   const alerts = useMemo((): Alert[] => {
@@ -150,6 +156,7 @@ const AlertsPage = () => {
       addAlert(alert);
     } catch (err) {
       logger.error("Erreur de marquage de l’alerte comme lue", err);
+      toast.error("Impossible de marquer cette alerte comme lue.");
     }
   };
 
@@ -187,13 +194,13 @@ const AlertsPage = () => {
 
   const formatDate = (dateString: string): string => {
     const date = new Date(dateString);
-    return date.toLocaleString();
+    return date.toLocaleString("fr-FR");
   };
 
   // Chargement
   if (isLoading && alerts.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64">
+      <div role="status" className="flex items-center justify-center h-64">
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-t-emerald-500 border-emerald-200 rounded-full animate-spin mx-auto"></div>
           <p className="mt-4 text-muted-foreground">Chargement des alertes...</p>
@@ -205,22 +212,12 @@ const AlertsPage = () => {
   // Erreur
   if (error && alerts.length === 0) {
     return (
-      <div className="p-6 bg-red-50 border border-red-200 rounded-md">
-        <h2 className="text-lg font-semibold text-red-700">Erreur</h2>
-        <p className="text-red-600">{error}</p>
+      <div className="rounded-md border border-destructive/30 bg-destructive/10 p-6">
+        <p role="alert">{error}</p>
         <Button
           className="mt-4"
           variant="outline"
-          onClick={() => {
-            setError(null);
-            setIsLoading(true);
-            setSelectedBuilding(null);
-            setFilters({
-              severity: "ALL",
-              isRead: "ALL",
-              buildingId: "ALL",
-            });
-          }}
+          onClick={() => setRetryCount(current => current + 1)}
         >
           Réessayer
         </Button>
@@ -241,7 +238,7 @@ const AlertsPage = () => {
         </div>
 
         {/* Filtres */}
-        <div className="flex flex-col sm:flex-row gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           {/* Filtre de sévérité */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -360,10 +357,7 @@ const AlertsPage = () => {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuItem
-                onClick={() => {
-                  handleFilterChange("buildingId", "ALL");
-                  setSelectedBuilding(null);
-                }}
+                onClick={() => handleFilterChange("buildingId", "ALL")}
                 className="cursor-pointer"
               >
                 Tous les bâtiments
@@ -371,10 +365,7 @@ const AlertsPage = () => {
               {buildings.map((building) => (
                 <DropdownMenuItem
                   key={building.id}
-                  onClick={() => {
-                    handleFilterChange("buildingId", building.id);
-                    setSelectedBuilding(building);
-                  }}
+                  onClick={() => handleFilterChange("buildingId", building.id)}
                   className="cursor-pointer"
                 >
                   {building.name}
@@ -386,20 +377,29 @@ const AlertsPage = () => {
       </div>
 
       {/* État de la connexion temps réel */}
-      {selectedBuilding && (
+      {buildingId !== "ALL" && (
         <div
+          role="status"
           className={`text-sm ${
-            isConnected ? "text-emerald-600" : "text-amber-600"
+            socketConnected ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400"
           } flex items-center`}
         >
           <span
+            aria-hidden="true"
             className={`inline-block w-2 h-2 rounded-full mr-2 ${
-              isConnected ? "bg-emerald-600" : "bg-amber-600"
+              socketConnected ? "bg-emerald-600" : "bg-amber-600"
             }`}
           ></span>
-          {isConnected
-            ? "Alertes en temps réel connectées"
-            : "Alertes en temps réel déconnectées"}
+          {socketConnected ? "Connecté au serveur d’alertes" : "Connexion au serveur d’alertes indisponible"}
+        </div>
+      )}
+
+      {(error || buildingsError) && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3">
+          <p role="alert" className="text-sm">{error || buildingsError}</p>
+          <Button size="sm" variant="outline" onClick={() => setRetryCount(current => current + 1)}>
+            Réessayer
+          </Button>
         </div>
       )}
 
@@ -437,7 +437,7 @@ const AlertsPage = () => {
               }`}
             >
               <CardHeader className="pb-2">
-                <div className="flex justify-between items-start">
+                <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <div>{getSeverityBadge(alert.severity)}</div>
                     <CardTitle className="text-base">
@@ -451,7 +451,7 @@ const AlertsPage = () => {
               </CardHeader>
               <CardContent className="pb-4">
                 <p className="mb-4">{alert.message}</p>
-                <div className="flex justify-between items-center">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm text-muted-foreground">
                     {buildings.find((b) => b.id === alert.buildingId)?.name || "Bâtiment inconnu"}
                   </div>
@@ -484,6 +484,17 @@ const AlertsPage = () => {
       )}
     </div>
   );
+};
+
+const AlertsPage = () => {
+  const user = useStore((state) => state.user);
+  const impersonatedTenantId = useStore((state) => state.impersonatedTenantId);
+  if (!user) {
+    return <p role="status" className="text-muted-foreground">Chargement des alertes…</p>;
+  }
+
+  const tenantId = user.role === "SUPER_ADMIN" && impersonatedTenantId ? impersonatedTenantId : user.tenantId;
+  return <TenantAlerts key={`${user.id}:${tenantId}`} tenantId={tenantId} />;
 };
 
 export default AlertsPage;

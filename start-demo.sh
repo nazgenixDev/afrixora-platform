@@ -11,6 +11,11 @@ umask 077
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_DEMO_FILE="$SCRIPT_DIR/.env.demo"
 
+if [[ $# -gt 1 || ( $# -eq 1 && "$1" != --sample-data ) ]]; then
+    echo "Utilisation : ./start-demo.sh [--sample-data]" >&2
+    exit 1
+fi
+
 if [ ! -f "$ENV_DEMO_FILE" ]; then
     echo "❌ Fichier .env.demo introuvable à la racine du projet."
     echo "   Copie le modèle puis renseigne les valeurs :"
@@ -86,6 +91,18 @@ if (['3000', '5432', '6379', '1883'].includes(process.env.PORT)) {
   process.exitCode = 1;
 }
 JS
+
+if [[ ${1:-} == --sample-data ]]; then
+    if [[ $(docker inspect --format '{{index .Config.Labels "com.afrixora.demo.local"}} {{.State.Running}}' \
+              afrixora-postgres 2>/dev/null) != 'true true' ]] ||
+       [[ $(docker port afrixora-postgres 5432/tcp) != '127.0.0.1:5432' ]]; then
+        echo "Démarrez la démo locale avant de charger les données fictives." >&2
+        exit 1
+    fi
+    cd "$SCRIPT_DIR/backend"
+    export NODE_ENV=development
+    exec node -r ts-node/register prisma/seed-demo.ts
+fi
 
 frontend_host=$(node -p 'new URL(process.env.NEXT_PUBLIC_API_URL).hostname')
 demo_dir="$SCRIPT_DIR/.afrixora-demo"

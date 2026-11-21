@@ -4,8 +4,8 @@ import { Toaster } from "sonner";
 import { ThemeProvider } from "next-themes";
 
 export const metadata: Metadata = {
-  title: "AFRIXORA — Global IoT Intelligence Platform",
-  description: "B2B SaaS IoT platform for intelligent building management in Africa",
+  title: "AFRIXORA — Gestion intelligente des bâtiments",
+  description: "Plateforme IoT pour la gestion intelligente des bâtiments en Afrique",
   icons: {
     icon: "/favicon-afrixora.png",
   },
@@ -17,7 +17,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="fr" suppressHydrationWarning>
       <head>
         <link rel="icon" href="/favicon-afrixora.png" sizes="48x48" type="image/png" />
       </head>

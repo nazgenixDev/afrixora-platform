@@ -1,16 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import api, { tenantDeletedEvent } from "@/lib/api";
 import useStore from "@/store";
-import type { Building, PaginatedResponse } from "@/types";
+
+interface TenantOption {
+  id: string;
+  name: string;
+}
 
 const HeaderInfo = () => {
   const [time, setTime] = useState<string | null>(null);
-  const [buildingName, setBuildingName] = useState<string>("");
-  const [tenants, setTenants] = useState<any[]>([]);
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
   
   const user = useStore(state => state.user);
   const impersonatedTenantId = useStore(state => state.impersonatedTenantId);
@@ -19,10 +21,11 @@ const HeaderInfo = () => {
 
   // Horloge
   useEffect(() => {
-    setTime(new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
-    const timer = setInterval(() => {
+    const updateTime = () => {
       setTime(new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
-    }, 1000);
+    };
+    updateTime();
+    const timer = setInterval(updateTime, 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -35,7 +38,7 @@ const HeaderInfo = () => {
       controller?.abort();
       const request = new AbortController();
       controller = request;
-      api.get("/api/v1/tenants", { signal: request.signal })
+      api.get<TenantOption[]>("/api/v1/tenants", { signal: request.signal })
         .then(res => {
           if (!request.signal.aborted) setTenants(res.data || []);
         })
@@ -55,61 +58,30 @@ const HeaderInfo = () => {
     };
   }, [isSuperAdmin]);
 
-  // Charger le premier bâtiment du tenant courant
-  useEffect(() => {
-    const tenantId = isSuperAdmin ? impersonatedTenantId : user?.tenantId;
-    const controller = new AbortController();
-    setBuildingName("");
-    if (tenantId) {
-      api.get<PaginatedResponse<Building>>("/api/v1/buildings", { params: { limit: 1 }, signal: controller.signal })
-        .then(({ data }) => {
-          if (!controller.signal.aborted) setBuildingName(data.data[0]?.name ?? "");
-        })
-        .catch(() => {});
-    }
-    return () => controller.abort();
-  }, [impersonatedTenantId, user?.tenantId, isSuperAdmin]);
-
   const handleTenantChange = (value: string) => {
-    if (value === "__all__") {
-      setImpersonatedTenantId(null);
-    } else {
-      setImpersonatedTenantId(value);
-    }
+    setImpersonatedTenantId(value === "__all__" ? null : value);
     // Forcer un rechargement complet de la page pour re-fetch toutes les données
     window.location.reload();
   };
 
   return (
-    <div className="flex items-center gap-4">
+    <div className="flex w-full min-w-0 items-center gap-4 sm:w-auto">
       {isSuperAdmin && (
         <Select value={impersonatedTenantId || "__all__"} onValueChange={handleTenantChange}>
-          <SelectTrigger className="w-48">
-            <SelectValue placeholder="Sélectionner un tenant" />
+          <SelectTrigger
+            aria-label="Client actif"
+            className="w-full min-w-0 gap-2 sm:w-48 [&>span]:truncate [&>svg]:shrink-0"
+          >
+            <SelectValue placeholder="Sélectionner un client" />
           </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__all__">Mon tenant</SelectItem>
-            {tenants.map((t: any) => (
-              <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+          <SelectContent className="max-w-[calc(100vw-1rem)]">
+            <SelectItem value="__all__">Mon espace</SelectItem>
+            {tenants.map((tenant) => (
+              <SelectItem key={tenant.id} value={tenant.id} className="[overflow-wrap:anywhere]">{tenant.name}</SelectItem>
             ))}
           </SelectContent>
         </Select>
       )}
-
-      {buildingName && (
-        <div className="hidden sm:block">
-          <div className="text-sm font-medium">{buildingName}</div>
-          <div className="text-xs text-muted-foreground">Lubumbashi, RDC</div>
-        </div>
-      )}
-
-      <Badge variant="outline" className="hidden sm:flex items-center gap-1 animate-pulse text-emerald-400 border-emerald-400/30">
-        <span className="relative flex h-2 w-2">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-        </span>
-        Gateway connectée
-      </Badge>
 
       {time && (
         <div className="text-sm text-muted-foreground font-mono tabular-nums hidden md:block">

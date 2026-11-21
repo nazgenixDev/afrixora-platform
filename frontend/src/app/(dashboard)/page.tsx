@@ -1,441 +1,353 @@
 "use client";
-import SuperAdminDashboard from "@/components/dashboard/SuperAdminDashboard";
-import useStore from "@/store";
+
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Activity, AlertTriangle, BarChart3, Building2, Cpu, Zap } from "lucide-react";
+import {
+  CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart,
+  ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from "recharts";
+import KpiCard from "@/components/dashboard/KpiCard";
+import SuperAdminDashboard from "@/components/dashboard/SuperAdminDashboard";
+import { useDashboardBuildings } from "@/components/dashboard/useDashboardBuildings";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import KpiCard from "@/components/dashboard/KpiCard";
 import api from "@/lib/api";
 import logger from "@/lib/logger";
-import type { Device, Building, Alert, EnergySummary, ConsumptionBucket, ZoneBucket } from "@/types";
-import {
-  LineChart, Line, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
-} from "recharts";
-import { Zap, BarChart3, Cpu, AlertTriangle, Building2, Activity, RefreshCw } from "lucide-react";
+import useStore, { type User } from "@/store";
+import type { Alert, Building, ConsumptionBucket, Device, EnergySummary, PaginatedResponse, ZoneBucket } from "@/types";
+
+interface DashboardAutomation {
+  id: string;
+  buildingId: string;
+  name: string;
+  isActive: boolean;
+}
 
 interface DashboardData {
-  energySummary: EnergySummary | null;
-  consumptionData: { date: string; kwh: number }[];
-  zoneDistribution: { name: string; value: number; color: string }[];
-  devices: Device[];
-  alerts: Alert[];
-  automations: unknown[];
-  isLoading: boolean;
-  noBuilding: boolean;
+  summary: EnergySummary;
+  consumption: { date: string; kwh: number }[];
+  zones: { id: string | null; name: string; value: number; color: string }[];
+  devices: PaginatedResponse<Device>;
+  alerts: PaginatedResponse<Alert>;
+  automations: DashboardAutomation[];
+  onlineDevices: number;
+  criticalAlerts: number;
 }
 
 const COLORS = ["#00C9A7", "#3B82F6", "#FFA726", "#A855F7", "#FF4757", "#22C55E"];
-
-// Custom Tooltip personnalisé
-const CustomTooltip = ({ active, payload, label }: any) => {
-  if (active && payload && payload.length) {
-    return (
-      <div className="bg-card border rounded-xl shadow-lg p-3 backdrop-blur-sm">
-        <p className="text-sm font-medium mb-1">{label}</p>
-        {payload.map((entry: any, idx: number) => (
-          <p key={idx} className="text-sm" style={{ color: entry.color }}>
-            {entry.name}: <span className="font-semibold">{entry.value.toFixed(1)} kWh</span>
-          </p>
-        ))}
-      </div>
-    );
-  }
-  return null;
+const dateFormat = new Intl.DateTimeFormat("fr-FR", {
+  weekday: "short", day: "numeric", timeZone: "Africa/Kinshasa",
+});
+const alertDateFormat = new Intl.DateTimeFormat("fr-FR", {
+  dateStyle: "short", timeStyle: "short", timeZone: "Africa/Kinshasa",
+});
+const numberFormat = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 });
+const tooltipStyle = {
+  backgroundColor: "hsl(var(--card))",
+  borderColor: "hsl(var(--border))",
+  borderRadius: "0.75rem",
+  color: "hsl(var(--foreground))",
 };
 
-const DashboardPage = () => {
-  const [buildings, setBuildings] = useState<Building[]>([]);
-  const [selectedBuilding, setSelectedBuilding] = useState<string>("");
-  const [data, setData] = useState<DashboardData>({
-    energySummary: null,
-    consumptionData: [],
-    zoneDistribution: [],
-    devices: [],
-    alerts: [],
-    automations: [],
-    isLoading: true,
-    noBuilding: false,
-  });
+function BuildingDashboard({ building, role }: { building: Building; role: User["role"] }) {
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const canManage = role === "SUPER_ADMIN" || role === "TENANT_ADMIN" || role === "BUILDING_ADMIN";
 
-  // Charger la liste des bâtiments au montage
   useEffect(() => {
-    (async () => {
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const buildingId = building.id;
+    const energyOptions = { signal, params: { buildingId, period: "7d" } };
+
+    async function loadData() {
       try {
-        const res = await api.get("/api/v1/buildings");
-        const buildingList: Building[] = Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
-        setBuildings(buildingList);
-        
-        // Restaurer le bâtiment depuis localStorage, ou prendre le premier
-        const savedBuildingId = localStorage.getItem("afrixora_selected_building");
-        if (savedBuildingId && buildingList.some((b: Building) => b.id === savedBuildingId)) {
-          setSelectedBuilding(savedBuildingId);
-        } else if (buildingList.length > 0) {
-          setSelectedBuilding(buildingList[0].id);
-        } else {
-          setData(prev => ({ ...prev, noBuilding: true, isLoading: false }));
-        }
-      } catch (err) {
-        logger.error("Erreur chargement bâtiments", err);
-        setData(prev => ({ ...prev, isLoading: false, noBuilding: true }));
-      }
-    })();
-  }, []);
-
-  // Sauvegarder la sélection dans localStorage
-  useEffect(() => {
-    if (selectedBuilding) {
-      localStorage.setItem("afrixora_selected_building", selectedBuilding);
-    }
-  }, [selectedBuilding]);
-
-  // Charger les données pour le bâtiment sélectionné
-  useEffect(() => {
-    if (!selectedBuilding) return;
-    let cancelled = false;
-    (async () => {
-      setData(prev => ({ ...prev, isLoading: true }));
-      try {
-        const [sumRes, consRes, zoneRes, devRes, alRes, auRes] = await Promise.all([
-          api.get(`/api/v1/energy/summary?buildingId=${selectedBuilding}&period=7d`),
-          api.get(`/api/v1/energy/consumption?buildingId=${selectedBuilding}&period=7d`),
-          api.get(`/api/v1/energy/by-zone?buildingId=${selectedBuilding}&period=7d`),
-          api.get("/api/v1/devices"),
-          api.get("/api/v1/alerts"),
-          api.get("/api/v1/automations"),
+        const [summary, consumption, zones, devices, onlineDevices, alerts, criticalAlerts, automations] = await Promise.all([
+          api.get<EnergySummary>("/api/v1/energy/summary", energyOptions),
+          api.get<ConsumptionBucket[]>("/api/v1/energy/consumption", energyOptions),
+          api.get<ZoneBucket[]>("/api/v1/energy/by-zone", energyOptions),
+          api.get<PaginatedResponse<Device>>("/api/v1/devices", { signal, params: { buildingId, limit: 6 } }),
+          api.get<PaginatedResponse<Device>>("/api/v1/devices", { signal, params: { buildingId, isOnline: true, limit: 1 } }),
+          api.get<PaginatedResponse<Alert>>("/api/v1/alerts", { signal, params: { buildingId, isRead: false, limit: 3 } }),
+          api.get<PaginatedResponse<Alert>>("/api/v1/alerts", {
+            signal, params: { buildingId, isRead: false, severity: "CRITICAL", limit: 1 },
+          }),
+          api.get<DashboardAutomation[]>("/api/v1/automations", { signal }),
         ]);
 
-        if (cancelled) return;
-
-        // Filtrer les devices et alertes par le buildingId
-        const allDevices: Device[] = Array.isArray(devRes.data) ? devRes.data : (devRes.data?.data ?? []);
-        const buildingDevices = allDevices.filter((d: Device) => d.buildingId === selectedBuilding);
-        const buildingAlerts: Alert[] = Array.isArray(alRes.data) ? alRes.data : (alRes.data?.data ?? []);
-        const filteredAlerts = buildingAlerts.filter((a: Alert) => a.buildingId === selectedBuilding);
-        const allAutomations: unknown[] = Array.isArray(auRes.data) ? auRes.data : (auRes.data?.data ?? []);
-        const buildingAutomations = allAutomations.filter((a) => {
-          if (typeof a === 'object' && a !== null) {
-            return (a as Record<string, unknown>).buildingId === selectedBuilding;
-          }
-          return false;
-        });
-
-        const consumptionData = (Array.isArray(consRes.data) ? consRes.data : (consRes.data?.data ?? [])).map((i: ConsumptionBucket) => ({
-          date: new Date(i.bucket).toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", timeZone: "Africa/Kinshasa" }),
-          kwh: i.total_kwh,
-        }));
-
-        const zoneDistribution = (Array.isArray(zoneRes.data) ? zoneRes.data : (zoneRes.data?.data ?? [])).map((i: ZoneBucket, idx: number) => ({
-          name: i.zone_name || i.name || "Sans zone",
-          value: i.total_kwh,
-          color: COLORS[idx % COLORS.length],
-        }));
-
+        if (signal.aborted) return;
         setData({
-          energySummary: sumRes.data ?? sumRes,
-          consumptionData,
-          zoneDistribution,
-          devices: buildingDevices,
-          alerts: filteredAlerts,
-          automations: buildingAutomations,
-          isLoading: false,
-          noBuilding: false,
+          summary: summary.data,
+          consumption: consumption.data.map(bucket => ({
+            date: dateFormat.format(new Date(bucket.bucket)),
+            kwh: bucket.total_kwh,
+          })),
+          zones: zones.data.map((zone, index) => ({
+            id: zone.zoneId,
+            name: zone.name || "Sans zone",
+            value: zone.total_kwh,
+            color: COLORS[index % COLORS.length],
+          })),
+          devices: devices.data,
+          onlineDevices: onlineDevices.data.total,
+          alerts: alerts.data,
+          criticalAlerts: criticalAlerts.data.total,
+          automations: automations.data.filter(automation => automation.buildingId === buildingId).slice(0, 3),
         });
-      } catch (err) {
-        logger.error("Erreur chargement données dashboard", err);
-        if (!cancelled) setData(prev => ({ ...prev, isLoading: false }));
+      } catch (error) {
+        if (signal.aborted) return;
+        controller.abort();
+        logger.error("Erreur de chargement du tableau de bord du bâtiment", error);
+        setFailed(true);
       }
-    })();
-    return () => { cancelled = true; };
-  }, [selectedBuilding]);
-
-  const user = useStore(state => state.user);
-  const impersonatedTenantId = useStore(state => state.impersonatedTenantId);
-  const [showSuperAdmin, setShowSuperAdmin] = useState(false);
-
-  useEffect(() => {
-    if (user?.role === "SUPER_ADMIN" && !impersonatedTenantId) {
-      setShowSuperAdmin(true);
-    } else {
-      setShowSuperAdmin(false);
     }
-  }, [user, impersonatedTenantId]);
 
-  // Loading state
-  if (data.isLoading) {
+    void loadData();
+    return () => controller.abort();
+  }, [building.id, attempt]);
+
+  if (failed) {
     return (
-      <div className="space-y-6 animate-fade-in">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="skeleton h-8 w-48 mb-2" />
-            <div className="skeleton h-4 w-32" />
-          </div>
-          <div className="skeleton h-10 w-44 rounded-lg" />
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {[1,2,3,4].map(i => (
-            <div key={i} className="skeleton h-32 rounded-xl" />
-          ))}
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 skeleton h-80 rounded-xl" />
-          <div className="skeleton h-80 rounded-xl" />
-        </div>
+      <div className="space-y-3">
+        <p role="alert" className="text-sm text-destructive">Impossible de charger les données du bâtiment.</p>
+        <Button variant="outline" onClick={() => {
+          setFailed(false);
+          setAttempt(previous => previous + 1);
+        }}>Réessayer</Button>
       </div>
     );
   }
 
-  if (data.noBuilding) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="text-center space-y-4 animate-fade-in-up">
-          <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mx-auto">
-            <Building2 className="w-8 h-8 text-muted-foreground" />
-          </div>
-          <p className="text-muted-foreground text-lg">Aucun bâtiment enregistré.</p>
-          <Button className="bg-brand-600 hover:bg-brand-700 shadow-lg shadow-brand-500/25" onClick={() => window.location.href = "/buildings"}>
-            Ajouter un bâtiment
-          </Button>
-        </div>
-      </div>
-    );
+  if (!data) {
+    return <p role="status" className="py-12 text-center text-muted-foreground">Chargement des données du bâtiment…</p>;
   }
 
-  if (showSuperAdmin) {
-    return <SuperAdminDashboard />;
-  }
-
-  const onlineDevices = data.devices.filter((d: Device) => d.isOnline).length;
-  const totalDevices = data.devices.length;
-  const activeAlerts = data.alerts.filter((a: Alert) => !a.isRead).length;
-  const criticalAlerts = data.alerts.filter((a: Alert) => a.severity === "CRITICAL" && !a.isRead).length;
-  const selectedBuildingName = buildings.find(b => b.id === selectedBuilding)?.name || "Bâtiment";
+  const { devices, alerts, criticalAlerts, onlineDevices, summary } = data;
+  const onlinePercent = devices.total > 0 ? Math.round((onlineDevices / devices.total) * 100) : 0;
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Header avec sélecteur de bâtiment */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">{selectedBuildingName}</h1>
-          <p className="text-muted-foreground flex items-center gap-1">
-            <Building2 className="w-3.5 h-3.5" />
-            {buildings.find(b => b.id === selectedBuilding)?._count?.zones || 0} zones · {totalDevices} appareils
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {buildings.length > 1 && (
-            <Select value={selectedBuilding} onValueChange={setSelectedBuilding}>
-              <SelectTrigger className="w-48">
-                <SelectValue placeholder="Sélectionner un bâtiment" />
-              </SelectTrigger>
-              <SelectContent>
-                {buildings.map((b: Building) => (
-                  <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <Badge variant="outline" className="gap-1.5 text-emerald-500 border-emerald-500/30 bg-emerald-500/5">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-            </span>
-            Live
-          </Badge>
-        </div>
-      </div>
-
-      {/* Si aucun appareil */}
-      {totalDevices === 0 && (
-        <div className="p-8 border-2 border-dashed rounded-xl bg-muted/10 text-center animate-fade-in">
-          <Cpu className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-          <p className="text-muted-foreground mb-3">Aucun appareil enregistré pour ce bâtiment.</p>
-          <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => window.location.href = "/devices"}>
-            Ajouter des appareils
-          </Button>
-        </div>
-      )}
-
-      {/* KPI Cards */}
+    <>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard
-          label="Puissance actuelle"
-          value={data.energySummary?.currentPowerW?.toFixed(1) ?? "—"}
-          unit={data.energySummary?.currentPowerW != null ? "W" : undefined}
-          icon={<Zap className="w-4 h-4" />}
-          accentColor="emerald"
-        />
-        <KpiCard
-          label="Conso. 7 jours"
-          value={data.energySummary?.totalKwh?.toFixed(1) || "0"}
-          unit="kWh"
-          icon={<BarChart3 className="w-4 h-4" />}
-          accentColor="blue"
-        />
-        <KpiCard
-          label="Appareils en ligne"
-          value={onlineDevices}
-          unit={`/ ${totalDevices}`}
-          icon={<Cpu className="w-4 h-4" />}
-          accentColor="purple"
-          trend={{ direction: "neutral", value: `${totalDevices > 0 ? Math.round((onlineDevices / totalDevices) * 100) : 0}% connectés` }}
-        />
-        <KpiCard
-          label="Alertes actives"
-          value={activeAlerts}
-          icon={<AlertTriangle className="w-4 h-4" />}
-          accentColor="red"
-          trend={{ direction: criticalAlerts > 0 ? "up" : "neutral", value: `${criticalAlerts} critiques` }}
-        />
+        <KpiCard label="Puissance actuelle" value={summary.currentPowerW?.toFixed(1) ?? "—"}
+          unit={summary.currentPowerW != null ? "W" : undefined} icon={<Zap className="w-4 h-4" />} accentColor="emerald" />
+        <KpiCard label="Conso. 7 jours" value={summary.totalKwh.toFixed(1)} unit="kWh"
+          icon={<BarChart3 className="w-4 h-4" />} accentColor="blue" />
+        <KpiCard label="Appareils en ligne" value={onlineDevices} unit={`/ ${devices.total}`}
+          icon={<Cpu className="w-4 h-4" />} accentColor="purple"
+          trend={{ direction: "neutral", value: `${onlinePercent}% connectés` }} />
+        <KpiCard label="Alertes non lues" value={alerts.total}
+          icon={<AlertTriangle className="w-4 h-4" />} accentColor="red"
+          trend={{ direction: criticalAlerts > 0 ? "up" : "neutral", value: `${criticalAlerts} critiques` }} />
       </div>
 
-      {/* Graphiques et détails */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
+        <div className="min-w-0 lg:col-span-2 space-y-6">
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Consommation — 7 derniers jours</CardTitle>
-              <Activity className="w-4 h-4 text-muted-foreground" />
+            <CardHeader className="flex flex-row items-center justify-between gap-2">
+              <CardTitle>Consommation sur 7 jours</CardTitle>
+              <Activity className="w-4 h-4 shrink-0 text-muted-foreground" />
             </CardHeader>
             <CardContent className="h-72">
-              {data.consumptionData.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={data.consumptionData}>
+              {data.consumption.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+                  <LineChart data={data.consumption}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                     <XAxis dataKey="date" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
-                    <YAxis unit="kWh" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
-                    <Tooltip content={<CustomTooltip />} />
+                    <YAxis width={48} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
+                    <Tooltip contentStyle={tooltipStyle} formatter={value => `${numberFormat.format(Number(value))} kWh`} />
                     <Legend />
-                    <Line type="monotone" dataKey="kwh" name="Consommation" stroke="#10b981" strokeWidth={2} dot={{ r: 3, fill: "#10b981" }} activeDot={{ r: 6 }} />
+                    <Line type="monotone" dataKey="kwh" name="Consommation" stroke="#10b981" strokeWidth={2} />
                   </LineChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="flex items-center justify-center h-full flex-col gap-2 text-muted-foreground">
-                  <BarChart3 className="w-8 h-8" />
-                  <span>Aucune donnée de consommation</span>
-                </div>
+                <p className="flex h-full items-center justify-center text-center text-muted-foreground">
+                  Aucune mesure de consommation sur les 7 derniers jours.
+                </p>
               )}
             </CardContent>
           </Card>
 
-          {totalDevices > 0 && (
-            <div>
-              <h3 className="font-semibold mb-3 flex items-center gap-2">
-                <Cpu className="w-4 h-4" />
-                Appareils IoT
-              </h3>
+          <section className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="flex items-center gap-2 font-semibold"><Cpu className="w-4 h-4" /> Appareils IoT</h2>
+              <Button asChild variant="outline" size="sm">
+                <Link href="/devices">{canManage ? "Gérer les appareils" : "Voir les appareils"}</Link>
+              </Button>
+            </div>
+            {devices.total === 0 ? (
+              <p className="rounded-xl border-2 border-dashed p-5 text-sm text-muted-foreground">
+                Aucun appareil enregistré pour ce bâtiment.
+              </p>
+            ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {data.devices.slice(0, 6).map((d: Device) => (
-                  <Card key={d.id} className={`p-4 ${d.config?.state === "on" ? "border-emerald-500/30 bg-gradient-to-br from-emerald-500/5 to-transparent" : ""}`}>
-                    <div className="flex items-center justify-between mb-3">
-                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold ${d.config?.state === "on" ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400" : "bg-muted text-muted-foreground"}`}>
-                        {d.type[0]}
-                      </div>
-                      <Switch checked={d.config?.state === "on"} />
-                    </div>
-                    <div className="text-sm font-medium truncate">{d.name}</div>
-                    <div className="text-xs text-muted-foreground">{d.zone?.name || "—"}</div>
-                    <div className={`text-xs mt-1.5 flex items-center gap-1 ${d.isOnline ? "text-emerald-500" : "text-red-400"}`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${d.isOnline ? "bg-emerald-500" : "bg-red-400"}`} />
-                      {d.isOnline ? (d.config?.state === "on" ? "Actif" : "Éteint") : "Hors ligne"}
-                    </div>
+                {devices.data.map(device => (
+                  <Card key={device.id} className="min-w-0 p-4">
+                    <p className="text-sm font-medium [overflow-wrap:anywhere]">{device.name}</p>
+                    <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{device.zone?.name || "Sans zone"}</p>
+                    <Badge variant="outline" className={`mt-2 ${device.isOnline ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}>
+                      {device.isOnline ? "En ligne" : "Hors ligne"}
+                    </Badge>
                   </Card>
                 ))}
               </div>
-            </div>
-          )}
+            )}
+          </section>
         </div>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <Card>
             <CardHeader><CardTitle>Répartition par zone</CardTitle></CardHeader>
-            <CardContent className="h-48">
-              {data.zoneDistribution.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
+            <CardContent className="h-52">
+              {data.zones.some(zone => zone.value > 0) ? (
+                <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                   <PieChart>
-                    <Pie data={data.zoneDistribution} cx="50%" cy="50%" innerRadius={40} outerRadius={70} dataKey="value" nameKey="name">
-                      {data.zoneDistribution.map((entry, i: number) => <Cell key={i} fill={entry.color} />)}
+                    <Pie data={data.zones} innerRadius={36} outerRadius={62} dataKey="value" nameKey="name">
+                      {data.zones.map(zone => <Cell key={zone.id ?? "sans-zone"} fill={zone.color} />)}
                     </Pie>
-                    <Tooltip />
-                    <Legend layout="vertical" align="right" />
+                    <Tooltip contentStyle={tooltipStyle} formatter={value => `${numberFormat.format(Number(value))} kWh`} />
+                    <Legend />
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="flex items-center justify-center h-full text-muted-foreground">
-                  Aucune donnée
-                </div>
+                <p className="flex h-full items-center justify-center text-muted-foreground">Aucune consommation à répartir.</p>
               )}
             </CardContent>
           </Card>
 
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Alertes actives</CardTitle>
-              {activeAlerts > 0 && (
-                <Badge variant="destructive" className="text-xs">{activeAlerts}</Badge>
-              )}
+            <CardHeader className="flex flex-row items-center gap-2 space-y-0">
+              <CardTitle>Alertes non lues</CardTitle>
+              {alerts.total > 0 && <Badge variant="destructive">{alerts.total}</Badge>}
             </CardHeader>
-            <CardContent>
-              {data.alerts.filter((a: Alert) => !a.isRead).length > 0 ? (
-                data.alerts.filter((a: Alert) => !a.isRead).slice(0, 3).map((a: Alert) => (
-                  <div key={a.id} className="flex items-start gap-2 py-2.5 border-b border-border/50 last:border-0">
-                    <Badge className={a.severity === "CRITICAL" ? "bg-red-500" : a.severity === "WARNING" ? "bg-orange-500" : "bg-emerald-500"}>
-                      {a.severity === "CRITICAL" ? "CRIT" : a.severity === "WARNING" ? "WARN" : "INFO"}
-                    </Badge>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm truncate">{a.message}</p>
-                      <p className="text-xs text-muted-foreground">{new Date(a.createdAt).toLocaleString()}</p>
-                    </div>
-                    <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground hover:text-foreground">
-                      ACK
-                    </Button>
-                  </div>
-                ))
+            <CardContent className="space-y-3">
+              {alerts.total === 0 ? (
+                <p className="text-sm text-muted-foreground">Aucune alerte non lue.</p>
               ) : (
-                <div className="text-center py-6">
-                  <div className="w-10 h-10 rounded-full bg-emerald-50 dark:bg-emerald-500/10 flex items-center justify-center mx-auto mb-2">
-                    <RefreshCw className="w-5 h-5 text-emerald-500" />
-                  </div>
-                  <p className="text-sm text-muted-foreground">Aucune alerte active</p>
-                </div>
+                <ul className="divide-y">
+                  {alerts.data.map(alert => (
+                    <li key={alert.id} className="flex items-start gap-2 py-2 first:pt-0">
+                      <Badge variant={alert.severity === "CRITICAL" ? "destructive" : "secondary"}>
+                        {alert.severity === "CRITICAL" ? "Critique" : alert.severity === "WARNING" ? "Avert." : "Info"}
+                      </Badge>
+                      <div className="min-w-0">
+                        <p className="text-sm [overflow-wrap:anywhere]">{alert.message}</p>
+                        <p className="text-xs text-muted-foreground">{alertDateFormat.format(new Date(alert.createdAt))}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
               )}
+              <Button asChild variant="outline" size="sm">
+                <Link href="/alerts">{role === "VIEWER" ? "Voir les alertes" : "Gérer les alertes"}</Link>
+              </Button>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader><CardTitle>Automatisations</CardTitle></CardHeader>
-            <CardContent>
-              {data.automations.length > 0 ? (
-                data.automations.slice(0, 3).map((a) => {
-                  const automation = a as Record<string, unknown>;
-                  const trigger = automation.trigger as Record<string, unknown> | undefined;
-                  const action = automation.action as Record<string, unknown> | undefined;
-                  return (
-                    <div key={automation.id as string} className="flex items-center justify-between py-2.5 border-b border-border/50 last:border-0">
-                      <div className="min-w-0 flex-1 mr-2">
-                        <p className="text-sm font-medium truncate">{automation.name as string}</p>
-                        <p className="text-xs text-muted-foreground truncate">
-                          SI {trigger?.metric as string} {trigger?.operator as string} {trigger?.value as string} → {action?.type as string}
-                        </p>
-                      </div>
-                      <Switch checked={automation.isActive as boolean} />
-                    </div>
-                  );
-                })
+            <CardContent className="space-y-3">
+              {data.automations.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Aucune automatisation configurée.</p>
               ) : (
-                <div className="text-center py-6">
-                  <p className="text-sm text-muted-foreground">Aucune automatisation configurée</p>
-                </div>
+                <ul className="divide-y">
+                  {data.automations.map(automation => (
+                    <li key={automation.id} className="flex items-start justify-between gap-2 py-2 first:pt-0">
+                      <span className="min-w-0 text-sm [overflow-wrap:anywhere]">{automation.name}</span>
+                      <Badge variant="secondary" className="shrink-0">{automation.isActive ? "Active" : "Désactivée"}</Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {canManage && (
+                <Button asChild variant="outline" size="sm">
+                  <Link href="/automations">Gérer les automatisations</Link>
+                </Button>
               )}
             </CardContent>
           </Card>
         </div>
       </div>
+    </>
+  );
+}
+
+function TenantDashboard({ role }: { role: User["role"] }) {
+  const { state, retry } = useDashboardBuildings();
+  const [selectedBuildingId, setSelectedBuildingId] = useState<string | null>(null);
+  const canManage = role === "SUPER_ADMIN" || role === "TENANT_ADMIN" || role === "BUILDING_ADMIN";
+
+  if (state.status === "loading") {
+    return <p role="status" className="py-12 text-center text-muted-foreground">Chargement des bâtiments…</p>;
+  }
+
+  if (state.status === "error") {
+    return (
+      <div className="space-y-3">
+        <h1 className="text-2xl font-bold">Tableau de bord</h1>
+        <p role="alert" className="text-sm text-destructive">Impossible de charger la liste des bâtiments.</p>
+        <Button variant="outline" onClick={retry}>Réessayer</Button>
+      </div>
+    );
+  }
+
+  const { buildings, savedBuildingId } = state;
+  const selectedId = selectedBuildingId ?? savedBuildingId;
+  const building = buildings.find(item => item.id === selectedId) ?? buildings[0];
+
+  if (!building) {
+    return (
+      <div className="space-y-3">
+        <h1 className="text-2xl font-bold">Tableau de bord</h1>
+        <p className="text-muted-foreground">Aucun bâtiment actif dans cet espace.</p>
+        {canManage && <Button asChild><Link href="/buildings">Gérer les bâtiments</Link></Button>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold tracking-tight [overflow-wrap:anywhere]">{building.name}</h1>
+          <p className="flex items-center gap-1 text-muted-foreground">
+            <Building2 className="w-3.5 h-3.5 shrink-0" />
+            Données du bâtiment
+          </p>
+        </div>
+        {buildings.length > 1 && (
+          <Select value={building.id} onValueChange={id => {
+            setSelectedBuildingId(id);
+            localStorage.setItem("afrixora_selected_building", id);
+          }}>
+            <SelectTrigger aria-label="Bâtiment" className="min-w-0 sm:w-48 [&>span]:truncate">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {buildings.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )}
+      </div>
+      <BuildingDashboard key={building.id} building={building} role={role} />
     </div>
   );
-};
+}
 
-export default DashboardPage;
+export default function DashboardPage() {
+  const user = useStore(state => state.user);
+  const impersonatedTenantId = useStore(state => state.impersonatedTenantId);
+
+  if (!user) return <p role="status" className="py-12 text-center text-muted-foreground">Chargement du profil…</p>;
+  if (user.role === "SUPER_ADMIN" && !impersonatedTenantId) return <SuperAdminDashboard />;
+
+  return (
+    <TenantDashboard
+      key={`${user.id}:${user.role}:${impersonatedTenantId ?? user.tenantId}`}
+      role={user.role}
+    />
+  );
+}

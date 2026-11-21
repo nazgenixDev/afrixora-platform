@@ -3,40 +3,64 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import api from "@/lib/api";
 import logger from "@/lib/logger";
+import type { Alert } from "@/types";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  PieChart, Pie, Cell
+  Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell,
 } from "recharts";
 
 const COLORS = ["#00C9A7", "#3B82F6", "#FFA726", "#A855F7", "#FF4757", "#22C55E"];
 
+interface AdminSummary {
+  kpis: {
+    totalTenants: number;
+    totalBuildings: number;
+    totalDevices: number;
+    onlineDevices: number;
+    activeAlerts: number;
+    totalAutomations: number;
+  };
+  consumption: { daily: number; weekly: number; monthly: number; yearly: number };
+  currentPower: number | null;
+  topBuildings: { buildingId: string; buildingName: string; tenantName: string; totalKwh: number }[];
+  recentAlerts: Pick<Alert, "id" | "severity" | "message" | "createdAt">[];
+}
+
 const SuperAdminDashboard = () => {
-  const [data, setData] = useState<any>({
-    kpis: null,
-    consumption: null,
-    currentPower: null,
-    topBuildings: [],
-    recentAlerts: [],
-    isLoading: true,
-  });
+  const [data, setData] = useState<AdminSummary | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await api.get("/api/v1/admin/summary");
-        setData({ ...res.data, isLoading: false });
-      } catch (err) {
-        logger.error(String(err));
-        setData((prev: typeof data) => ({ ...prev, isLoading: false }));
-      }
-    })();
-  }, []);
+    const controller = new AbortController();
+    api.get<AdminSummary>("/api/v1/admin/summary", { signal: controller.signal })
+      .then(({ data }) => {
+        if (!controller.signal.aborted) setData(data);
+      })
+      .catch(error => {
+        if (controller.signal.aborted) return;
+        logger.error("Erreur de chargement de la synthèse globale", error);
+        setFailed(true);
+      });
+    return () => controller.abort();
+  }, [attempt]);
 
-  if (data.isLoading) {
-    return <div className="flex items-center justify-center h-64 text-muted-foreground">Chargement...</div>;
+  if (failed) {
+    return (
+      <div className="space-y-3">
+        <h1 className="text-2xl font-bold">Vue globale</h1>
+        <p role="alert" className="text-sm text-destructive">Impossible de charger la synthèse globale.</p>
+        <Button variant="outline" onClick={() => {
+          setFailed(false);
+          setAttempt(previous => previous + 1);
+        }}>Réessayer</Button>
+      </div>
+    );
   }
+
+  if (!data) return <p role="status" className="py-12 text-center text-muted-foreground">Chargement de la synthèse globale…</p>;
 
   const { kpis, consumption, currentPower, topBuildings, recentAlerts } = data;
 
@@ -44,10 +68,10 @@ const SuperAdminDashboard = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Vue Globale — Tous les Tenants</h1>
+          <h1 className="text-2xl font-bold">Vue globale des espaces clients</h1>
           <p className="text-muted-foreground">Consolidation de toutes les données de la plateforme</p>
         </div>
-        <Badge variant="outline" className="text-emerald-400 border-emerald-400/30 animate-pulse">● Super Admin</Badge>
+        <Badge variant="outline" className="text-emerald-400 border-emerald-400/30">Super Admin</Badge>
       </div>
 
       {/* KPIs Row */}
@@ -112,7 +136,7 @@ const SuperAdminDashboard = () => {
                 </tr>
               </thead>
               <tbody>
-                {topBuildings?.map((b: any) => (
+                {topBuildings.map(b => (
                   <tr key={b.buildingId} className="border-b border-border/50">
                     <td className="py-2 font-medium">{b.buildingName}</td>
                     <td className="py-2 text-muted-foreground">{b.tenantName}</td>
@@ -130,7 +154,7 @@ const SuperAdminDashboard = () => {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={topBuildings} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="totalKwh" nameKey="buildingName">
-                  {topBuildings?.map((entry: any, i: number) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                  {topBuildings.map((building, index) => <Cell key={building.buildingId} fill={COLORS[index % COLORS.length]} />)}
                 </Pie>
                 <Tooltip />
                 <Legend layout="vertical" align="right" />
@@ -144,17 +168,17 @@ const SuperAdminDashboard = () => {
       <Card>
         <CardHeader><CardTitle>Alertes récentes non lues</CardTitle></CardHeader>
         <CardContent>
-          {recentAlerts?.length === 0 ? (
+          {recentAlerts.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-4">Aucune alerte active</p>
           ) : (
-            recentAlerts?.map((a: any) => (
+            recentAlerts.map(a => (
               <div key={a.id} className="flex items-start gap-2 py-2 border-b border-border last:border-0">
                 <Badge className={a.severity === "CRITICAL" ? "bg-red-600" : a.severity === "WARNING" ? "bg-orange-500" : "bg-emerald-600"}>
                   {a.severity === "CRITICAL" ? "CRIT" : a.severity === "WARNING" ? "WARN" : "INFO"}
                 </Badge>
                 <div className="flex-1">
                   <p className="text-sm">{a.message}</p>
-                  <p className="text-xs text-muted-foreground">{a.buildingName} · {new Date(a.createdAt).toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground">{new Date(a.createdAt).toLocaleString("fr-FR", { timeZone: "Africa/Kinshasa" })}</p>
                 </div>
               </div>
             ))

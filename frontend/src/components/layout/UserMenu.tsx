@@ -26,9 +26,10 @@ import { toast } from "sonner";
 
 interface UserMenuProps {
   collapsed?: boolean;
+  onNavigate?: () => void;
 }
 
-const UserMenu = ({ collapsed = false }: UserMenuProps) => {
+const UserMenu = ({ collapsed = false, onNavigate }: UserMenuProps) => {
   const user = useStore(state => state.user);
   const clearAuth = useStore(state => state.clearAuth);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -69,7 +70,7 @@ const UserMenu = ({ collapsed = false }: UserMenuProps) => {
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button className="w-full flex items-center justify-center p-2 rounded-xl hover:bg-accent/50 hover:text-accent-foreground transition-colors">
+          <button aria-label="Menu utilisateur" className="w-full flex items-center justify-center p-2 rounded-xl hover:bg-accent/50 hover:text-accent-foreground transition-colors">
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
               {user?.name ? getInitials(user.name) : "?"}
             </div>
@@ -82,7 +83,7 @@ const UserMenu = ({ collapsed = false }: UserMenuProps) => {
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem asChild>
-            <Link href="/settings" className="cursor-pointer flex items-center gap-2">
+            <Link href="/settings" onNavigate={onNavigate} className="cursor-pointer flex items-center gap-2">
               <Settings className="h-4 w-4" />
               Paramètres
             </Link>
@@ -133,7 +134,7 @@ const UserMenu = ({ collapsed = false }: UserMenuProps) => {
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
-          <Link href="/settings" className="cursor-pointer flex items-center gap-2">
+          <Link href="/settings" onNavigate={onNavigate} className="cursor-pointer flex items-center gap-2">
             <Settings className="h-4 w-4" />
             Paramètres
           </Link>

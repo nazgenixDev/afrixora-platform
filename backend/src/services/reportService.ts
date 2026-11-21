@@ -1,4 +1,5 @@
 import { query } from '../utils/database';
+import { join } from 'node:path';
 import PDFDocument from 'pdfkit';
 import { format } from 'date-fns';
 import { avgPowerSql, buildingDevicesSql, energySamplesSql, totalEnergySql } from './energyQueries';
@@ -6,6 +7,8 @@ import logger from '../utils/logger';
 import { AppError, NotFoundError } from '../utils/errors';
 
 const maxCsvRows = 50_000;
+const reportLogo = join(__dirname, '../assets/afrixora-logo.png');
+const periodDays = { day: 1, week: 7, month: 30 };
 
 function csvText(value: string | null) {
   const text = value ?? '';
@@ -55,10 +58,7 @@ export const generatePDF = async (
 ): Promise<Buffer> => {
   try {
     const to = new Date();
-    const from = new Date();
-    if (period === 'day') from.setDate(from.getDate() - 1);
-    else if (period === 'week') from.setDate(from.getDate() - 7);
-    else from.setMonth(from.getMonth() - 1);
+    const from = new Date(to.getTime() - periodDays[period] * 24 * 60 * 60 * 1000);
 
     // 1. Get building info
     const bSql = `SELECT name, address, city FROM "Building" WHERE id = $1 AND "tenantId" = $2 AND "isActive"`;
@@ -98,14 +98,16 @@ export const generatePDF = async (
     const buffers: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => buffers.push(chunk));
 
-    // Header
-    doc.fontSize(25).text('AFRIXORA', { align: 'center' });
+    // Le fichier source garde une marge transparente importante autour du lettrage.
+    const logoWidth = 180;
+    doc.image(reportLogo, (doc.page.width - logoWidth) / 2, doc.page.margins.top - 40, { width: logoWidth });
+    doc.y += 44;
     doc.fontSize(18).text('Rapport de consommation énergétique', { align: 'center' });
     doc.moveDown();
     doc.fontSize(12).text(`Bâtiment : ${building.name}`);
     doc.fontSize(12).text(`Adresse : ${building.address}, ${building.city}`);
-    doc.fontSize(12).text(`Période : ${format(from, 'dd/MM/yyyy')} — ${format(to, 'dd/MM/yyyy')}`);
-    doc.fontSize(12).text(`Généré le : ${format(new Date(), 'dd/MM/yyyy à HH:mm')}`);
+    doc.fontSize(12).text(`Période : ${format(from, 'dd/MM/yyyy HH:mm')} — ${format(to, 'dd/MM/yyyy HH:mm')}`);
+    doc.fontSize(12).text(`Généré le : ${format(to, "dd/MM/yyyy 'à' HH:mm")}`);
     doc.moveDown();
 
     // KPIs
@@ -146,14 +148,17 @@ export const generatePDF = async (
     // Footer
     doc.fontSize(9).text(
       '© 2026 NAZGENIX SAS — AFRIXORA Intelligent Connected Systems — afrixora.cd',
+      doc.page.margins.left,
+      rowY + 12,
       { align: 'center' }
     );
 
-    doc.end();
-
-    const pdfBuffer = await new Promise<Buffer>((resolve) => {
-      doc.on('end', () => resolve(Buffer.concat(buffers)));
+    const result = new Promise<Buffer>((resolve, reject) => {
+      doc.once('end', () => resolve(Buffer.concat(buffers)));
+      doc.once('error', reject);
     });
+    doc.end();
+    const pdfBuffer = await result;
 
     logger.info('PDF report generated successfully', { tenantId, buildingId });
     return pdfBuffer;

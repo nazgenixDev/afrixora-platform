@@ -1,77 +1,102 @@
 "use client";
-import { useSubscriptionLimits } from "@/hooks/useSubscriptionLimits";
-import { useRouter } from "next/navigation";
 
-import { useState, useEffect } from "react";
+import { isAxiosError } from "axios";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useSubscriptionLimits } from "@/hooks/useSubscriptionLimits";
 import api from "@/lib/api";
 import logger from "@/lib/logger";
+import useStore from "@/store";
+import type { Building, PaginatedResponse } from "@/types";
 
-interface Building {
-  id: string;
-  name: string;
-}
+const reportPeriods = [
+  { value: "day", label: "24 heures", days: 1 },
+  { value: "week", label: "7 jours", days: 7 },
+  { value: "month", label: "30 jours", days: 30 },
+] as const;
 
-const ReportsPage = () => {
+type ReportFormat = "csv" | "pdf";
+
+const TenantReports = () => {
   const { limits, loading: limitsLoading } = useSubscriptionLimits();
-  const router = useRouter();
 
   const [buildings, setBuildings] = useState<Building[]>([]);
-  const [selectedBuilding, setSelectedBuilding] = useState<string>("");
-  const [period, setPeriod] = useState<string>("30d");
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [selectedBuilding, setSelectedBuilding] = useState("");
+  const [period, setPeriod] = useState<(typeof reportPeriods)[number]>(reportPeriods[2]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [buildingsError, setBuildingsError] = useState(false);
+  const [downloading, setDownloading] = useState<ReportFormat | null>(null);
+  const [downloadError, setDownloadError] = useState("");
+  const [downloadStatus, setDownloadStatus] = useState("");
+  const pendingDownload = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const response = await api.get('/api/v1/buildings');
-        const raw = response.data;
-        const buildingList = Array.isArray(raw) ? raw : (raw?.data ?? []);
-        setBuildings(buildingList);
-        if (buildingList.length > 0) setSelectedBuilding(buildingList[0].id);
-      } catch (err) {
-        logger.error("Erreur chargement bâtiments", err);
-      } finally {
-        setIsLoading(false);
-      }
-    })();
+    const controller = new AbortController();
+    api.get<Building[] | PaginatedResponse<Building>>("/api/v1/buildings", {
+      signal: controller.signal,
+    }).then(({ data }) => {
+      if (controller.signal.aborted) return;
+      const buildingList = Array.isArray(data) ? data : data.data;
+      setBuildings(buildingList);
+      setSelectedBuilding(buildingList[0]?.id ?? "");
+    }).catch((error) => {
+      if (controller.signal.aborted) return;
+      logger.error("Erreur chargement bâtiments", error);
+      setBuildingsError(true);
+    }).finally(() => {
+      if (!controller.signal.aborted) setIsLoading(false);
+    });
+    return () => {
+      controller.abort();
+      pendingDownload.current?.abort();
+    };
   }, []);
 
-  const download = async (type: 'csv' | 'pdf') => {
-    if (!selectedBuilding) return;
+  const download = async (type: ReportFormat) => {
+    if (!selectedBuilding || pendingDownload.current || !limits?.hasExport) return;
+    const controller = new AbortController();
+    pendingDownload.current = controller;
+    setDownloading(type);
+    setDownloadError("");
+    setDownloadStatus("");
     try {
-      const from = new Date();
-      from.setDate(from.getDate() - (period === '24h' ? 1 : period === '7d' ? 7 : 30));
       const to = new Date();
+      const from = new Date(to.getTime() - period.days * 24 * 60 * 60 * 1000);
+      const params = type === "csv"
+        ? { buildingId: selectedBuilding, from: from.toISOString(), to: to.toISOString() }
+        : { buildingId: selectedBuilding, period: period.value };
 
-      const endpoint =
-        type === 'csv'
-          ? `/api/v1/reports/csv?buildingId=${selectedBuilding}&from=${from.toISOString()}&to=${to.toISOString()}`
-          : `/api/v1/reports/pdf?buildingId=${selectedBuilding}&period=${period}`;
-
-      const response = await api.get(endpoint, { responseType: 'blob' });
-
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
+      const { data } = await api.get<Blob>(`/api/v1/reports/${type}`, {
+        params, responseType: "blob", signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      const url = URL.createObjectURL(data);
+      const link = document.createElement("a");
       link.href = url;
-      link.setAttribute('download', `afrixora_report.${type}`);
+      link.download = `afrixora_report.${type}`;
       document.body.appendChild(link);
       link.click();
       link.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      logger.error("Erreur téléchargement rapport", err);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setDownloadStatus(`Téléchargement du rapport ${type.toUpperCase()} lancé.`);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      logger.error("Erreur téléchargement rapport", error);
+      const status = isAxiosError(error) ? error.response?.status : undefined;
+      if (status === 403) {
+        setDownloadError("Votre plan ne permet pas cet export.");
+      } else if (status === 413) {
+        setDownloadError("Le rapport est trop volumineux. Sélectionnez une période plus courte.");
+      } else {
+        setDownloadError("Le téléchargement a échoué. Veuillez réessayer.");
+      }
+    } finally {
+      pendingDownload.current = null;
+      if (!controller.signal.aborted) setDownloading(null);
     }
   };
-
-  // Rediriger si le plan ne permet pas l'export
-  useEffect(() => {
-    if (!limitsLoading && limits && !limits.hasExport) {
-      router.push("/");
-    }
-  }, [limits, limitsLoading, router]);
 
   if (isLoading || limitsLoading) {
     return (
@@ -93,50 +118,71 @@ const ReportsPage = () => {
           <CardTitle>Nouveau rapport</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div>
-            <label className="text-sm font-medium">Bâtiment</label>
-            <Select value={selectedBuilding} onValueChange={setSelectedBuilding}>
-              <SelectTrigger className="w-full mt-1">
-                <SelectValue placeholder="Sélectionner un bâtiment" />
-              </SelectTrigger>
-              <SelectContent>
-                {buildings.map((b) => (
-                  <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {!limits && <p role="alert" className="text-sm text-destructive">Impossible de vérifier les droits d’export.</p>}
+          {limits && !limits.hasExport && <p className="text-sm text-muted-foreground">Votre plan ne permet pas l’export de rapports.</p>}
+          {limits?.hasExport && buildingsError && (
+            <p role="alert" className="text-sm text-destructive">Impossible de charger les bâtiments.</p>
+          )}
+          {limits?.hasExport && !buildingsError && buildings.length === 0 && (
+            <p className="text-sm text-muted-foreground">Ajoutez un bâtiment pour générer un rapport.</p>
+          )}
+          {limits?.hasExport && buildings.length > 0 && (
+            <>
+              <div>
+                <label htmlFor="report-building" className="text-sm font-medium">Bâtiment</label>
+                <Select value={selectedBuilding} onValueChange={setSelectedBuilding} disabled={!!downloading}>
+                  <SelectTrigger id="report-building" className="w-full mt-1">
+                    <SelectValue placeholder="Sélectionner un bâtiment" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {buildings.map((building) => (
+                      <SelectItem key={building.id} value={building.id}>{building.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-          <div>
-            <label className="text-sm font-medium">Période</label>
-            <Select value={period} onValueChange={setPeriod}>
-              <SelectTrigger className="w-full mt-1">
-                <SelectValue placeholder="Période" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="24h">24 heures</SelectItem>
-                <SelectItem value="7d">7 jours</SelectItem>
-                <SelectItem value="30d">30 jours</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+              <div>
+                <label htmlFor="report-period" className="text-sm font-medium">Période</label>
+                <Select value={period.value} disabled={!!downloading} onValueChange={(value) => {
+                  const selection = reportPeriods.find((item) => item.value === value);
+                  if (selection) setPeriod(selection);
+                }}>
+                  <SelectTrigger id="report-period" className="w-full mt-1">
+                    <SelectValue placeholder="Période" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {reportPeriods.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-          <div className="flex gap-4 pt-4">
-            {limits?.hasExport && (
-              <>
-                <Button onClick={() => download('csv')} className="bg-emerald-600 hover:bg-emerald-700">
-                  📄 Télécharger CSV
+              <div className="flex flex-wrap gap-4 pt-4" aria-busy={!!downloading}>
+                <Button onClick={() => download("csv")} disabled={!!downloading} className="bg-emerald-600 hover:bg-emerald-700">
+                  {downloading === "csv" ? "Génération du CSV…" : "Télécharger le CSV"}
                 </Button>
-                <Button onClick={() => download('pdf')} className="bg-emerald-600 hover:bg-emerald-700">
-                  📑 Télécharger PDF
+                <Button onClick={() => download("pdf")} disabled={!!downloading} className="bg-emerald-600 hover:bg-emerald-700">
+                  {downloading === "pdf" ? "Génération du PDF…" : "Télécharger le PDF"}
                 </Button>
-              </>
-            )}
-          </div>
+              </div>
+              {downloadError && <p role="alert" className="text-sm text-destructive">{downloadError}</p>}
+              {downloadStatus && <p role="status" className="text-sm text-muted-foreground">{downloadStatus}</p>}
+            </>
+          )}
         </CardContent>
       </Card>
     </div>
   );
+};
+
+const ReportsPage = () => {
+  const user = useStore(state => state.user);
+  const selectedTenantId = useStore(state => state.impersonatedTenantId);
+  if (!user) return <p role="status" className="text-muted-foreground">Chargement…</p>;
+  const tenantId = user.role === "SUPER_ADMIN" && selectedTenantId ? selectedTenantId : user.tenantId;
+  return <TenantReports key={`${user.id}:${tenantId}`} />;
 };
 
 export default ReportsPage;

@@ -22,6 +22,14 @@ install -m 600 .env.demo.example .env.demo
 
 Renseignez les valeurs d’exemple dans `.env.demo`, puis lancez `./start-demo.sh`. Les services de démo écoutent uniquement sur la boucle locale. Si la démo tourne déjà, ouvrez la page de connexion indiquée par le script. La configuration des anciens conteneurs de démo et le déploiement avec Docker Compose sont décrits dans le guide. [Guide de déploiement](DEPLOYMENT.md)
 
+### Démonstration du parcours client
+
+Dans `.env.demo`, renseignez `SEED_DEMO_CLIENT_PASSWORD` avec un mot de passe propre au compte client. Avec la démo en cours, lancez `./start-demo.sh --sample-data`, puis connectez-vous avec `client@demo.afrixora.test` dans une session de navigateur dédiée.
+
+Le scénario contient le bâtiment fictif **Centre Horizon (démo)**, deux zones, des appareils, 30 jours de mesures simulées et deux alertes. Le client de démonstration utilise l’offre PRO pour accéder aux exports avec les permissions habituelles. Le chargement peut être relancé pour compléter l’historique horaire. Le mot de passe est défini à la création du compte.
+
+Depuis le tableau de bord, ouvrez **Énergie** pour lire les mesures, marquez une alerte comme lue dans **Alertes**, puis ouvrez **Rapports** pour télécharger le PDF avec le logo AFRIXORA.
+
 ## Architecture
 
 - Layer 0 → IoT Devices
