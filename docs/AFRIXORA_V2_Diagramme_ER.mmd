@@ -1,0 +1,18 @@
+erDiagram
+    Tenant ||--o{ Building : possede
+    Building ||--o{ Zone : contient
+    Building ||--o{ EnergySource : dispose_de
+    Building ||--o{ EnergyBus : distribue
+    EnergySource ||--o{ SourceFeed : fournit
+    EnergyBus ||--o{ SourceFeed : recoit
+    EnergyBus ||--o{ DistributionBoard : dessert
+    DistributionBoard ||--o{ Circuit : contient
+    Circuit ||--o{ ElectricalLoad : alimente
+    Zone ||--o{ ElectricalLoad : localise
+    Building ||--o{ Device : connecte
+    Device ||--o{ MeteringPoint : mesure
+    MeteringPoint ||--o{ EnergyReading : enregistre
+    Device ||--o{ ControlEndpoint : expose
+    ControlEndpoint ||--o{ DeviceCommand : execute
+    Building ||--o{ Automation : definit
+    Automation ||--o{ AutomationExecution : journalise
