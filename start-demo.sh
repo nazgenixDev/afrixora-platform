@@ -148,6 +148,9 @@ check_demo_ports
 export NODE_ENV=development
 export API_BIND_HOST=127.0.0.1
 export TRUST_PROXY_HOPS=0
+export AFRIXORA_DEVICE_CONTROL_ENABLED=false
+export AFRIXORA_AUTOMATION_COMMANDS_ENABLED=false
+export NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED=false
 echo "Démarrage de la démo AFRIXORA sur la boucle locale."
 
 # Fonction pour créer ou démarrer un conteneur

@@ -10,7 +10,7 @@
     "start:prod": "node dist/server.js",
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --exclude tests/v2_p0_isolated.test.cjs"
   },
   "dependencies": {
     "@prisma/client": "^5.7.0",

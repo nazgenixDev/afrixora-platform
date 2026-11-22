@@ -18,7 +18,9 @@ vi.mock('../src/services/refreshSessions', () => ({ startRefreshSession: vi.fn()
 vi.mock('../src/services/apiKeyUsage', () => ({ consumeApiKeyQuota: vi.fn(async () => true) }));
 
 const sendEmail = vi.hoisted(() => vi.fn());
+const publishCommand = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('resend', () => ({ Resend: class { emails = { send: sendEmail }; } }));
+vi.mock('../src/services/mqttWorker', () => ({ publishMqtt: publishCommand }));
 
 const api = '/api/v1';
 let app: ReturnType<typeof request>;
@@ -73,6 +75,8 @@ beforeAll(async () => {
   vi.stubEnv('JWT_SECRET', randomUUID());
   vi.stubEnv('JWT_REFRESH_SECRET', randomUUID());
   vi.stubEnv('CORS_ORIGINS', browserOrigin);
+  vi.stubEnv('AFRIXORA_DEVICE_CONTROL_ENABLED', 'false');
+  vi.stubEnv('AFRIXORA_AUTOMATION_COMMANDS_ENABLED', 'false');
   app = request(createApp(0));
   const passwordHash = await bcrypt.hash(password, 4);
   const viewerEmail = `${randomUUID()}@example.test`;
@@ -124,6 +128,7 @@ afterAll(async () => {
         prisma.alert.deleteMany({ where }),
         prisma.automation.deleteMany({ where }),
         prisma.deviceState.deleteMany({ where }),
+        prisma.deviceCommand.deleteMany({ where }),
         prisma.device.deleteMany({ where }),
         prisma.zone.deleteMany({ where }),
         prisma.building.deleteMany({ where }),
@@ -234,6 +239,70 @@ describe('Isolation entre tenants', () => {
   });
 });
 
+describe('Journal des commandes', () => {
+  it('désactive la publication par défaut sans écrire dans le journal', async () => {
+    await app.post(`${api}/devices/${local.deviceId}/control`).set('Authorization', authorization)
+      .send({ command: 'set_state', params: { state: 'on' } }).expect(503)
+      .expect(({ body }) => expect(body.code).toBe('CONTROL_DISABLED'));
+    expect(publishCommand).not.toHaveBeenCalled();
+    expect(await prisma.deviceCommand.count({ where: { tenantId: local.id } })).toBe(0);
+  });
+
+  it('journalise l’envoi sans confirmer l’état, limite les commandes concurrentes et protège l’historique', async () => {
+    const device = await prisma.device.create({ data: {
+      tenantId: local.id, buildingId: local.buildingId, name: 'Lampe de test', type: 'LIGHT', isOnline: true,
+    } });
+    const path = `${api}/devices/${device.id}`;
+    const control = () => app.post(`${path}/control`).set('Authorization', operatorAuthorization)
+      .send({ command: 'turn_on' });
+    vi.stubEnv('AFRIXORA_DEVICE_CONTROL_ENABLED', 'true');
+    try {
+      await app.post(`${api}/devices/${local.deviceId}/control`).set('Authorization', authorization)
+        .send({ command: 'turn_on' }).expect(400);
+      await app.post(`${path}/control`).set('Authorization', viewerAuthorization)
+        .send({ command: 'turn_on' }).expect(403);
+
+      const responses = await Promise.all([control(), control()]);
+      expect(responses.map(({ status }) => status).sort()).toEqual([202, 409]);
+      const accepted = responses.find(({ status }) => status === 202)?.body;
+      const blocked = responses.find(({ status }) => status === 409)?.body;
+      expect(accepted.status).toBe('SENT');
+      expect(blocked.code).toBe('COMMAND_IN_PROGRESS');
+      expect(publishCommand).toHaveBeenCalledTimes(1);
+      expect(await prisma.deviceState.findUnique({ where: { deviceId: device.id } })).toBeNull();
+
+      await app.get(`${path}/commands/${accepted.commandId}`).set('Authorization', authorization).expect(200)
+        .expect(({ body }) => expect(body).toMatchObject({ status: 'SENT', params: { state: 'on' } }));
+      await app.get(`${api}/devices/${local.deviceId}/commands/${accepted.commandId}`)
+        .set('Authorization', authorization).expect(404);
+      const foreignAuthorization = await bearer(foreign.email);
+      await app.get(`${path}/commands/${accepted.commandId}`).set('Authorization', foreignAuthorization).expect(404);
+      await app.delete(path).set('Authorization', authorization).expect(409)
+        .expect(({ body }) => expect(body.code).toBe('DEVICE_AUDIT_HISTORY'));
+
+      await prisma.deviceCommand.update({ where: { id: accepted.commandId }, data: { expiresAt: new Date(0) } });
+      await app.get(`${path}/commands/${accepted.commandId}`).set('Authorization', authorization).expect(200)
+        .expect(({ body }) => expect(body.status).toBe('EXPIRED'));
+      await control().expect(202);
+    } finally {
+      vi.stubEnv('AFRIXORA_DEVICE_CONTROL_ENABLED', 'false');
+      await prisma.deviceCommand.deleteMany({ where: { deviceId: device.id, tenantId: local.id } });
+      await prisma.device.delete({ where: { id: device.id, tenantId: local.id } });
+    }
+  });
+
+  it('rejette les références du journal vers un autre tenant ou bâtiment en base', async () => {
+    const building = await prisma.building.create({ data: {
+      tenantId: local.id, name: 'Bâtiment de test supplémentaire', address: 'Adresse de test',
+    } });
+    const command = { deviceId: local.deviceId, command: 'set_state', expiresAt: new Date() };
+    await expect(prisma.deviceCommand.create({ data: { ...command, tenantId: local.id, buildingId: building.id } }))
+      .rejects.toMatchObject({ code: 'P2003' });
+    await expect(prisma.deviceCommand.create({ data: { ...command, tenantId: foreign.id, buildingId: foreign.buildingId } }))
+      .rejects.toMatchObject({ code: 'P2003' });
+  });
+});
+
 describe('Suppression définitive des clients', () => {
   it('réserve la suppression au super administrateur', async () => {
     const endpoint = `${api}/tenants/${local.id}/permanent`;
@@ -257,6 +326,7 @@ describe('Suppression définitive des clients', () => {
       prisma.zone.create({ data: { ...where, buildingId, name: slug } }),
       prisma.gateway.create({ data: { ...where, buildingId, name: slug } }),
       prisma.deviceState.create({ data: { ...where, deviceId, state: {} } }),
+      prisma.deviceCommand.create({ data: { ...where, buildingId, deviceId, command: 'set_state', expiresAt: new Date(), status: 'EXPIRED' } }),
       prisma.apiKey.create({ data: { ...where, name: slug, keyHash: randomUUID(), keyPrefix: 'test' } }),
       prisma.apiLog.create({ data: { ...where, method: 'GET', endpoint: '/', statusCode: 200, durationMs: 10, ip: '127.0.0.1' } }),
       prisma.subscriptionHistory.create({ data: { ...where, plan: 'BASIC', status: 'ACTIVE' } }),
@@ -267,6 +337,7 @@ describe('Suppression définitive des clients', () => {
     await app.delete(endpoint).set('Authorization', superAuthorization).expect(204);
     expect(await prisma.tenant.findUnique({ where: { id: tenantId } })).toMatchObject({ isActive: false });
     expect(await prisma.device.count({ where })).toBe(1);
+    expect(await prisma.deviceCommand.count({ where })).toBe(1);
     expect(await prisma.apiKey.count({ where: { ...where, isActive: true } })).toBe(0);
     await app.patch(endpoint).set('Authorization', superAuthorization).send({ isActive: true }).expect(200);
     await app.get(`${api}/auth/me`).set('Authorization', previousSession).expect(401);
@@ -280,13 +351,14 @@ describe('Suppression définitive des clients', () => {
       prisma.zone.count({ where }),
       prisma.device.count({ where }),
       prisma.deviceState.count({ where }),
+      prisma.deviceCommand.count({ where }),
       prisma.alert.count({ where }),
       prisma.automation.count({ where }),
       prisma.gateway.count({ where }),
       prisma.apiKey.count({ where }),
       prisma.apiLog.count({ where }),
       prisma.subscriptionHistory.count({ where }),
-    ])).toEqual(Array(11).fill(0));
+    ])).toEqual(Array(12).fill(0));
     expect(await prisma.device.count({ where: { tenantId: foreign.id } })).toBe(1);
     await login(email, password).expect(401);
     await app.delete(`${endpoint}/permanent`).set('Authorization', superAuthorization).expect(404);
@@ -363,9 +435,6 @@ describe('Clés API et permissions', () => {
     await app.patch(`${api}/alerts/${local.alertId}/read`).set('Authorization', viewerAuthorization).expect(403);
     await app.patch(`${api}/devices/${local.deviceId}`).set('Authorization', operatorAuthorization)
       .send({ name: 'Appareil de test' }).expect(403);
-    await app.post(`${api}/devices/${local.deviceId}/control`).set('Authorization', operatorAuthorization)
-      .send({ command: 'set_state', params: { state: 'on' } }).expect(400)
-      .expect(({ body }) => expect(body.code).toBe('INVALID_DEVICE_COMMAND'));
   });
 });
 

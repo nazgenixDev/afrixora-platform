@@ -1,8 +1,7 @@
 import { Server } from 'socket.io';
 import { prisma } from '../utils/database';
 import { automationActionSchema } from '../utils/automationSchemas';
-import { assertDeviceCanBeControlled } from '../utils/deviceCommands';
-import { publishMqtt } from './mqttWorker';
+import deviceService from './deviceService';
 import logger from '../utils/logger';
 
 /**
@@ -99,20 +98,11 @@ export const evaluate = async (
 
           // Execute the action based on its type
           if (action.type === 'DEVICE_COMMAND') {
-            const target = await prisma.device.findFirst({
-              where: {
-                id: action.deviceId, tenantId, buildingId,
-                building: { isActive: true, tenant: { isActive: true } },
-              },
-              select: { type: true },
-            });
-            if (!target) continue;
-            assertDeviceCanBeControlled(target.type);
-            await publishMqtt(
-              `afrixora/${tenantId}/${buildingId}/devices/${action.deviceId}/commands`,
-              { command: action.command, params: action.params }
-            );
-            
+            if (process.env.AFRIXORA_AUTOMATION_COMMANDS_ENABLED !== 'true' ||
+                process.env.AFRIXORA_DEVICE_CONTROL_ENABLED !== 'true') continue;
+            const result = await deviceService.control(action.deviceId, action, tenantId,
+              { origin: 'AUTOMATION', buildingId });
+            if (result.status === 'FAILED' || result.status === 'EXPIRED' || result.status === 'REJECTED') continue;
           } 
           else if (action.type === 'SEND_ALERT') {
             // Create alert in database
@@ -139,7 +129,7 @@ export const evaluate = async (
 
           // Update lastFiredAt timestamp
           await prisma.automation.update({
-            where: { id: rule.id },
+            where: { id: rule.id, tenantId, buildingId },
             data: { lastFiredAt: new Date() }
           });
         }

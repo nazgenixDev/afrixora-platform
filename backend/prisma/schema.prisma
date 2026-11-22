@@ -29,6 +29,16 @@ enum SubscriptionStatus {
   TRIAL
 }
 
+enum DeviceCommandStatus {
+  PENDING
+  SENT
+  ACKNOWLEDGED
+  CONFIRMED
+  FAILED
+  EXPIRED
+  REJECTED
+}
+
 enum DeviceType {
   LIGHT
   PLUG
@@ -149,6 +159,7 @@ model Device {
   building   Building      @relation(fields: [buildingId], references: [id])
   zone       Zone?         @relation(fields: [zoneId], references: [id])
   states     DeviceState[]
+  commands   DeviceCommand[]
   alerts     Alert[]
 
   @@index([tenantId, buildingId])
@@ -164,6 +175,31 @@ model DeviceState {
   state     Json
   updatedAt DateTime @updatedAt
   device    Device   @relation(fields: [deviceId], references: [id])
+}
+
+// CONFIRMED représente un état déclaré par le boîtier.
+model DeviceCommand {
+  id                String              @id @default(uuid())
+  tenantId          String
+  buildingId        String
+  deviceId          String
+  command           String
+  params            Json                @default("{}")
+  origin            String              @default("MANUAL")
+  requestedByUserId String?
+  status            DeviceCommandStatus @default(PENDING)
+  expiresAt         DateTime
+  sentAt            DateTime?
+  acknowledgedAt    DateTime?
+  confirmedAt       DateTime?
+  failedAt          DateTime?
+  observedState     Json?
+  error             String?
+  createdAt         DateTime            @default(now())
+  device            Device              @relation(fields: [deviceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict)
+
+  @@index([tenantId, deviceId, createdAt(sort: Desc)])
+  @@index([status, expiresAt])
 }
 
 model Automation {

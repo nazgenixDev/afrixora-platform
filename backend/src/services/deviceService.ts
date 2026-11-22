@@ -1,9 +1,10 @@
-import type { DeviceType, Prisma, Protocol } from '@prisma/client';
+import { Prisma, type DeviceType, type Protocol } from '@prisma/client';
 import { prisma } from '../utils/database';
 import { publishMqtt } from './mqttWorker';
-import { NotFoundError } from '../utils/errors';
-import { assertDeviceCanBeControlled, type DeviceCommand } from '../utils/deviceCommands';
-import logger from '../utils/logger';
+import { AppError, NotFoundError } from '../utils/errors';
+import { assertDeviceCanBeControlled, type DeviceCommandInput } from '../utils/deviceCommands';
+
+const activeCommandStatuses = ['PENDING', 'SENT', 'ACKNOWLEDGED'] as const;
 
 export interface DeviceFilters {
   buildingId?: string;
@@ -154,31 +155,111 @@ export default {
     if (!device) {
       throw new NotFoundError('Device not found');
     }
-    await prisma.device.delete({ where: { ...relationsDuTenant(tenantId), id, tenantId } });
+    const where = { ...relationsDuTenant(tenantId), id, tenantId };
+    if (await prisma.deviceCommand.count({ where: { deviceId: id, tenantId } })) {
+      throw new AppError('Cet appareil possède un historique de commandes.', 409, 'DEVICE_AUDIT_HISTORY');
+    }
+    try {
+      await prisma.device.delete({ where });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003' &&
+          await prisma.deviceCommand.count({ where: { deviceId: id, tenantId } })) {
+        throw new AppError('Cet appareil possède un historique de commandes.', 409, 'DEVICE_AUDIT_HISTORY');
+      }
+      throw error;
+    }
   },
 
-  async control(id: string, command: DeviceCommand, tenantId: string) {
+  async control(
+    id: string,
+    command: DeviceCommandInput,
+    tenantId: string,
+    context: { origin?: 'MANUAL' | 'AUTOMATION'; requestedByUserId?: string; buildingId?: string } = {},
+  ) {
+    if (process.env.AFRIXORA_DEVICE_CONTROL_ENABLED !== 'true' ||
+        (context.origin === 'AUTOMATION' && process.env.AFRIXORA_AUTOMATION_COMMANDS_ENABLED !== 'true')) {
+      throw new AppError('Le pilotage des appareils est désactivé.', 503, 'CONTROL_DISABLED');
+    }
     const device = await prisma.device.findFirst({
-      where: { id, tenantId, building: { tenantId, isActive: true, tenant: { isActive: true } } },
+      where: { id, tenantId, buildingId: context.buildingId,
+        building: { tenantId, isActive: true, tenant: { isActive: true } } },
     });
     if (!device) {
       throw new NotFoundError('Device not found');
     }
     assertDeviceCanBeControlled(device.type);
-    const topic = `afrixora/${tenantId}/${device.buildingId}/devices/${id}/commands`;
-    await publishMqtt(topic, command);
-    const state = command.command === 'set_state' ? command.params!.state! : command.command === 'turn_on' ? 'on' : 'off';
+    if (!device.isOnline) throw new AppError('Appareil hors ligne.', 409, 'DEVICE_OFFLINE');
+
+    const state = command.command === 'set_state' ? command.params?.state : command.command === 'turn_on' ? 'on' : 'off';
+    if (!state) throw new AppError('État demandé manquant.', 400, 'INVALID_DEVICE_COMMAND');
+    const scope = { tenantId, buildingId: device.buildingId, deviceId: id };
+    const requestedAt = new Date();
+    const expiresAt = new Date(requestedAt.getTime() + 30_000);
+    await prisma.deviceCommand.updateMany({
+      where: { ...scope, expiresAt: { lte: requestedAt }, status: { in: [...activeCommandStatuses] } },
+      data: { status: 'EXPIRED' },
+    });
+    let journal;
     try {
-      await prisma.deviceState.upsert({
-        where: { deviceId: id, tenantId },
-        update: { state: { ...(device.config as object || {}), state } },
-        create: { deviceId: id, tenantId, state: { state } },
+      journal = await prisma.deviceCommand.create({
+        data: { ...scope, command: 'set_state', params: { state }, expiresAt,
+          origin: context.origin ?? 'MANUAL', requestedByUserId: context.requestedByUserId },
       });
-    } catch {
-      // Le broker a déjà accepté la commande. Un échec local ne doit pas inciter à la répéter.
-      logger.warn('mqtt_command_state_not_recorded', { tenantId, deviceId: id });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new AppError('Une commande est déjà en cours pour cet appareil.', 409, 'COMMAND_IN_PROGRESS');
+      }
+      throw error;
     }
-    return { success: true };
+
+    const where = { ...scope, id: journal.id };
+    const topic = `afrixora/${tenantId}/${device.buildingId}/devices/${id}/commands`;
+    try {
+      await publishMqtt(topic, {
+        commandId: journal.id, command: command.command, params: command.params, expiresAt: expiresAt.toISOString(),
+      }, expiresAt);
+    } catch {
+      const failedAt = new Date();
+      const expired = failedAt >= expiresAt;
+      const result = await prisma.deviceCommand.updateMany({
+        where: { ...where, status: 'PENDING' },
+        data: expired ? { status: 'EXPIRED' } : { status: 'FAILED', failedAt, error: 'Échec de publication MQTT' },
+      });
+      if (!result.count) {
+        const current = await this.getCommand(id, journal.id, tenantId);
+        if (current.status !== 'EXPIRED') return { accepted: true, commandId: journal.id, status: current.status, expiresAt };
+      }
+      if (expired || !result.count) throw new AppError('Délai de commande dépassé.', 409, 'COMMAND_EXPIRED');
+      throw new AppError('Transport MQTT indisponible.', 503, 'MQTT_UNAVAILABLE');
+    }
+
+    const sentAt = new Date();
+    const sent = await prisma.deviceCommand.updateMany({
+      where: { ...where, status: 'PENDING', expiresAt: { gt: sentAt } },
+      data: { status: 'SENT', sentAt },
+    });
+    if (sent.count) return { accepted: true, commandId: journal.id, status: 'SENT' as const, expiresAt };
+
+    // Un accusé du boîtier peut précéder l'accusé de publication du broker.
+    await prisma.deviceCommand.updateMany({ where: { ...where, sentAt: null }, data: { sentAt } });
+    const current = await this.getCommand(id, journal.id, tenantId);
+    return { accepted: true, commandId: journal.id, status: current.status, expiresAt };
+  },
+
+  async getCommand(deviceId: string, commandId: string, tenantId: string) {
+    const device = await prisma.device.findFirst({
+      where: { ...relationsDuTenant(tenantId), id: deviceId, tenantId }, select: { buildingId: true },
+    });
+    if (!device) throw new NotFoundError('Appareil introuvable.');
+
+    const where = { id: commandId, deviceId, tenantId, buildingId: device.buildingId };
+    await prisma.deviceCommand.updateMany({
+      where: { ...where, expiresAt: { lte: new Date() }, status: { in: [...activeCommandStatuses] } },
+      data: { status: 'EXPIRED' },
+    });
+    const command = await prisma.deviceCommand.findFirst({ where });
+    if (!command) throw new NotFoundError('Commande introuvable.');
+    return command;
   },
 
   async getHistory(id: string, tenantId: string, limit = 100) {

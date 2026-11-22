@@ -66,6 +66,7 @@ export async function deleteTenantPermanently(id: string): Promise<void> {
     await tx.automation.deleteMany({ where });
     await tx.gateway.deleteMany({ where });
     await tx.deviceState.deleteMany({ where });
+    await tx.deviceCommand.deleteMany({ where });
     await tx.device.deleteMany({ where });
     await tx.zone.deleteMany({ where });
     await tx.building.deleteMany({ where });

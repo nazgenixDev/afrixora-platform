@@ -65,6 +65,7 @@ jobs:
         run: |
           npx prisma migrate deploy
           npm test
+          node --test tests/v2_p0_isolated.test.cjs
 
       - name: Rechercher les secrets dans les fichiers suivis
         if: ${{ !cancelled() }}

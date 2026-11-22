@@ -96,6 +96,8 @@ docker compose exec -T postgres pg_restore --list < ../afrixora-avant-p1-1.dump
 
 Si la migration Prisma `20260608234433_add_subscription_plans` est encore en attente sur une base existante, examiner les valeurs de `Alert.type` et sauvegarder les plans des tenants. Cette migration échoue si d’anciennes valeurs `AlertType` sont utilisées et recrée la colonne `Tenant.plan` avec la valeur `BASIC`.
 
+La migration du journal `20261122000000_add_device_command_journal` réutilise l’index composite de `20261120000000_enforce_tenant_relations`. Si une installation a déjà appliqué `20261121000100_device_command_journal` depuis l’autre branche, faire réconcilier son historique Prisma et son schéma sur une restauration isolée avant toute mise à jour. Conserver les commandes déjà journalisées et les migrations appliquées.
+
 Reporter les secrets dans le fichier `.env` protégé, préparer les identifiants MQTT et le certificat public avant la fenêtre de maintenance. Les nouveaux réseaux et rôles s’appliquent sans recréer les volumes PostgreSQL, Redis, MQTT et Grafana. Si Redis fonctionne encore en RDB seul, suivre la préparation AOF de la section 10. Les processus API doivent redémarrer ensemble avec le nouveau compte Redis.
 
 ---
@@ -237,6 +239,10 @@ bash infrastructure/scripts/validate-mqtt-auth.sh "$stage" "$MQTT_API_USER"
 Répéter la création pour chaque passerelle en passant tous ses identifiants d’appareil après son identifiant. Le compte `gateway-<gatewayId>` publie le statut de cette passerelle et les relevés ou événements de ses appareils, et reçoit leurs commandes. Le worker reçoit la télémétrie et publie les commandes. [Documentation Mosquitto](https://mosquitto.org/man/mosquitto-conf-5.html)
 
 Valider les accès sur un broker isolé avec des comptes fictifs, sur TCP et WebSocket. Confirmer les publications et les abonnements autorisés, le refus des accès inter-clients et le refus des connexions anonymes. Vérifier la répartition des appareils par passerelle dans l’inventaire.
+
+Laisser `AFRIXORA_DEVICE_CONTROL_ENABLED`, `AFRIXORA_AUTOMATION_COMMANDS_ENABLED` et `NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED` à `false`. Le transport des commandes utilise MQTT 5, QoS 1 et une durée de validité de 30 secondes. En production, un broker distant doit utiliser `mqtts://` ou `wss://` avec validation du certificat. L’accusé du broker marque la transmission. Le statut `CONFIRMED` correspond au dernier état déclaré par le boîtier et n’atteste pas la position physique d’un contacteur.
+
+Le POST `/api/v1/devices/:id/control` renvoie `503 CONTROL_DISABLED` avec les réglages de référence. Lors d’une recette autorisée en simulation, la réponse `202` fournit un `commandId` dont le statut est consultable sur `/api/v1/devices/:id/commands/:commandId`.
 
 Installer ensuite les fichiers dans le chemin de déploiement. Les commandes ci-dessous utilisent le groupe `1883` du broker officiel, à adapter si Docker utilise un remappage d’identités. Le dossier doit rester lisible par le groupe du broker et par l’opérateur de déploiement.
 
