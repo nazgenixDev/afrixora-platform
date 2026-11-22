@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app';
 import { prisma } from '../src/utils/database';
 import * as database from '../src/utils/database';
+import { createEnergyTopologyFixture } from './fixtures/energyTopology';
 
 vi.mock('../src/utils/redis', () => ({ default: {}, isRedisConnected: () => false }));
 vi.mock('../src/middleware/requestLogger', () => ({
@@ -127,6 +128,14 @@ afterAll(async () => {
         prisma.gateway.deleteMany({ where }),
         prisma.alert.deleteMany({ where }),
         prisma.automation.deleteMany({ where }),
+        prisma.controlEndpoint.deleteMany({ where }),
+        prisma.meteringPoint.deleteMany({ where }),
+        prisma.electricalLoad.deleteMany({ where }),
+        prisma.circuit.deleteMany({ where }),
+        prisma.distributionBoard.deleteMany({ where }),
+        prisma.sourceFeed.deleteMany({ where }),
+        prisma.energyBus.deleteMany({ where }),
+        prisma.energySource.deleteMany({ where }),
         prisma.deviceState.deleteMany({ where }),
         prisma.deviceCommand.deleteMany({ where }),
         prisma.device.deleteMany({ where }),
@@ -322,11 +331,19 @@ describe('Suppression définitive des clients', () => {
     const { id: tenantId, buildingId, deviceId, email } = removable;
     const slug = removable.slug;
     const where = { tenantId };
+    const scope = { tenantId, buildingId };
+    const { load, circuit } = await createEnergyTopologyFixture(prisma, scope);
+    const meter = await prisma.device.create({ data: { ...scope, type: 'ENERGY_METER', name: 'Compteur fictif' } });
     await prisma.$transaction([
       prisma.zone.create({ data: { ...where, buildingId, name: slug } }),
       prisma.gateway.create({ data: { ...where, buildingId, name: slug } }),
       prisma.deviceState.create({ data: { ...where, deviceId, state: {} } }),
       prisma.deviceCommand.create({ data: { ...where, buildingId, deviceId, command: 'set_state', expiresAt: new Date(), status: 'EXPIRED' } }),
+      prisma.meteringPoint.create({ data: {
+        ...scope, deviceId: meter.id, name: 'Mesure fictive', scope: 'LOAD', loadId: load.id,
+        unit: 'W', measurementMode: 'INSTANTANEOUS',
+      } }),
+      prisma.controlEndpoint.create({ data: { ...scope, deviceId, name: 'Canal fictif', targetCircuitId: circuit.id } }),
       prisma.apiKey.create({ data: { ...where, name: slug, keyHash: randomUUID(), keyPrefix: 'test' } }),
       prisma.apiLog.create({ data: { ...where, method: 'GET', endpoint: '/', statusCode: 200, durationMs: 10, ip: '127.0.0.1' } }),
       prisma.subscriptionHistory.create({ data: { ...where, plan: 'BASIC', status: 'ACTIVE' } }),
@@ -336,8 +353,9 @@ describe('Suppression définitive des clients', () => {
     const previousSession = await bearer(email);
     await app.delete(endpoint).set('Authorization', superAuthorization).expect(204);
     expect(await prisma.tenant.findUnique({ where: { id: tenantId } })).toMatchObject({ isActive: false });
-    expect(await prisma.device.count({ where })).toBe(1);
+    expect(await prisma.device.count({ where })).toBe(2);
     expect(await prisma.deviceCommand.count({ where })).toBe(1);
+    expect(await prisma.meteringPoint.count({ where })).toBe(1);
     expect(await prisma.apiKey.count({ where: { ...where, isActive: true } })).toBe(0);
     await app.patch(endpoint).set('Authorization', superAuthorization).send({ isActive: true }).expect(200);
     await app.get(`${api}/auth/me`).set('Authorization', previousSession).expect(401);
@@ -352,13 +370,21 @@ describe('Suppression définitive des clients', () => {
       prisma.device.count({ where }),
       prisma.deviceState.count({ where }),
       prisma.deviceCommand.count({ where }),
+      prisma.energySource.count({ where }),
+      prisma.energyBus.count({ where }),
+      prisma.sourceFeed.count({ where }),
+      prisma.distributionBoard.count({ where }),
+      prisma.circuit.count({ where }),
+      prisma.electricalLoad.count({ where }),
+      prisma.meteringPoint.count({ where }),
+      prisma.controlEndpoint.count({ where }),
       prisma.alert.count({ where }),
       prisma.automation.count({ where }),
       prisma.gateway.count({ where }),
       prisma.apiKey.count({ where }),
       prisma.apiLog.count({ where }),
       prisma.subscriptionHistory.count({ where }),
-    ])).toEqual(Array(12).fill(0));
+    ])).toEqual(Array(20).fill(0));
     expect(await prisma.device.count({ where: { tenantId: foreign.id } })).toBe(1);
     await login(email, password).expect(401);
     await app.delete(`${endpoint}/permanent`).set('Authorization', superAuthorization).expect(404);
