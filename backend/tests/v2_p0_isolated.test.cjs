@@ -197,6 +197,9 @@ function loadMqttWorker(mqtt, prisma = {}, env = {}) {
     '../utils/database': { prisma },
     '../utils/redis': { getRedisClient: () => ({}), isRedisConnected: () => false },
     './automationEngine': { evaluate: async () => {} },
+    './energyTelemetry': load('services/energyTelemetry.ts', {
+      zod, '../utils/database': { prisma },
+    }),
   }, env);
 }
 

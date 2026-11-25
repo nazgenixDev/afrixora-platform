@@ -223,6 +223,7 @@ model Building {
   name               String
   address            String
   city               String              @default("Lubumbashi")
+  timeZone           String?
   unitsCount         Int                 @default(0)
   config             Json                @default("{}")
   isActive           Boolean             @default(true)

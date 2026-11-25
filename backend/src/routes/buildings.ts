@@ -3,6 +3,7 @@ import { z } from 'zod';
 import buildingService from '../services/buildingService';
 import { authorize } from '../middleware/authorize';
 import { limitSchema, pageSchema } from '../utils/querySchemas';
+import { timeZoneSchema } from '../utils/buildingTimeZone';
 
 const router = Router();
 
@@ -10,6 +11,7 @@ const createBuildingSchema = z.object({
   name: z.string().min(1),
   address: z.string().min(1),
   city: z.string().optional(),
+  timeZone: timeZoneSchema.nullable().optional(),
   unitsCount: z.number().int().optional()
 });
 
@@ -60,7 +62,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
 router.patch('/:id', authorize(['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN']), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = updateBuildingSchema.parse(req.body);
-    const building = await buildingService.update(buildingId.parse(req.params.id), data, req.user!.tenantId);
+    const building = await buildingService.update(buildingId.parse(req.params.id), data, req.user!);
     return res.json(building);
   } catch (err) {
     next(err); return;

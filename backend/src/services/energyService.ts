@@ -1,6 +1,6 @@
 import { query } from '../utils/database';
 import {
-  avgPowerSql, energyPeriodHours, energySamplesSql, energyTimeZone, latestBuildingPowerW, totalEnergySql,
+  avgPowerSql, energyPeriodHours, energySamplesSql, latestBuildingPowerW, totalEnergySql,
   type EnergyPeriod,
 } from './energyQueries';
 
@@ -26,6 +26,7 @@ export class EnergyService {
          FROM sensor_readings
          WHERE device_id = $1::uuid
            AND tenant_id = $2::uuid
+           AND metering_point_id IS NULL
            AND metric = $3
            AND time BETWEEN $4 AND $5
          ORDER BY time ASC
@@ -37,6 +38,7 @@ export class EnergyService {
          FROM sensor_readings
          WHERE device_id = $1::uuid
            AND tenant_id = $2::uuid
+           AND metering_point_id IS NULL
            AND metric = $3
            AND time BETWEEN $4 AND $5`,
         [deviceId, tenantId, metric, from, to]
@@ -51,7 +53,7 @@ export class EnergyService {
     };
   }
 
-  async getConsumption(tenantId: string, buildingId: string, period: EnergyPeriod) {
+  async getConsumption(tenantId: string, buildingId: string, period: EnergyPeriod, timeZone = 'UTC') {
     const interval = period === '24h' ? '1 hour' : '1 day';
     const result = await query(
       `WITH ${periodSamplesSql(period)}
@@ -62,7 +64,7 @@ export class EnergyService {
        GROUP BY 1
        HAVING COUNT(*) FILTER (WHERE metric = 'energy_kwh') > 0
        ORDER BY 1`,
-      [tenantId, buildingId, energyPeriodHours(period), interval, energyTimeZone]
+      [tenantId, buildingId, energyPeriodHours(period), interval, timeZone]
     );
     return result.rows;
   }

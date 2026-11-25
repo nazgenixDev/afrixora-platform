@@ -83,6 +83,46 @@ Un point de mesure exige un appareil `ENERGY_METER` et une seule cible correspon
 
 La migration `20261122030000_energy_topology_access_archive` ajoute les affectations et les dates d’archivage. Vérifier la lignée du journal de commandes avant la mise à niveau et renouveler les droits SQL du compte applicatif selon le guide. [Guide de déploiement](DEPLOYMENT.md)
 
+## Télémétrie énergétique V2
+
+Publier un échantillon par message sur `afrixora/{tenantId}/{buildingId}/devices/{deviceId}/readings`, avec le compte MQTT autorisé sur ce topic. Utiliser QoS 1 et une publication sans rétention. Les messages historiques `{ timestamp, metrics, units }` restent pris en charge.
+
+```json
+{
+  "schemaVersion": 2,
+  "deviceId": "00000000-0000-4000-8000-000000000007",
+  "meteringPointId": "00000000-0000-4000-8000-000000000009",
+  "capturedAt": "2026-11-25T12:00:00+02:00",
+  "metric": "energy",
+  "value": 12500,
+  "unit": "Wh",
+  "measurementMode": "CUMULATIVE",
+  "bootId": "00000000-0000-4000-8000-000000000010",
+  "sequence": 42,
+  "quality": "MEASURED",
+  "origin": "DEVICE",
+  "sourceFeedId": "00000000-0000-4000-8000-000000000003"
+}
+```
+
+- `energy` représente un index non négatif (`CUMULATIVE`) ou l’énergie d’une période (`INTERVAL`), en `Wh` ou `kWh`. `power` représente une puissance instantanée en `W` ou `kW`. Déclarer un point de mesure par mode et sens de flux.
+- Le point actif, le compteur, le mode et la dimension de l’unité doivent correspondre au site authentifié par l’ACL du broker. `deviceId` doit correspondre au topic. L’origine déclarée (`DEVICE` ou `GATEWAY`) est conservée avec la qualité (`MEASURED`, `ESTIMATED` ou `INVALID`).
+- `capturedAt` est l’instant d’acquisition, avec décalage horaire explicite. La fenêtre d’admission V2 couvre les dernières 24 heures et tolère 5 minutes d’avance. Le serveur stocke aussi l’heure de réception. Pour un relevé par période, `capturedAt` marque la fin de la période.
+- Incrémenter `sequence` par compteur, point et métrique. Générer un nouvel UUID `bootId` au redémarrage. En cas de retransmission, réutiliser l’identité d’origine. PostgreSQL sérialise les écritures concurrentes d’une même identité et conserve le premier relevé persisté tant qu’il est retenu.
+- En cas d’échec SQL, le worker tente une mise en attente Redis puis un rejeu avec délai croissant pendant au plus 24 heures. Le tampon du tenant est limité à 1 000 entrées. Un PUBACK MQTT ne garantit pas la persistance en base. Une indisponibilité de Redis, une éviction ou une expiration peut entraîner une perte. L’ACL reste la première barrière pendant la panne, et le serveur revérifie le périmètre lors de la persistance.
+
+### Lire et interpréter les résultats
+
+`GET /api/v1/energy/metered?buildingId=…&meteringPointId=…&from=…&to=…` utilise une session JWT et les droits de topologie du bâtiment. La période maximale est de 93 jours et la lecture accepte jusqu’à 50 000 échantillons. Configurer `timeZone` via l’API Bâtiments avec un fuseau IANA et un droit d’écriture sur la topologie du site. Pour une ville reconnue, le fuseau local sert de défaut. L’API V2 demande une configuration explicite si le site est inconnu.
+
+- Pour le **total du bâtiment**, sélectionner le point d’import situé sur le tableau général et ajouter `buildingTotal=true`. Cette requête agrège uniquement ce point. Lire les sous-compteurs séparément. L’exploitant identifie le point représentant le périmètre réel du bâtiment.
+- Pour un index cumulatif, le calcul utilise deux relevés consécutifs du même démarrage. Une baisse d’index, un changement de compteur ou de démarrage, un numéro manquant ou une mesure invalide laisse un trou. La première mesure de la période constitue une référence. Un delta traversant minuit figure dans le total de période et dans `energyWithoutDay`.
+- Les totaux mesurés et estimés sont séparés. `null` signifie qu’aucune quantité de la catégorie n’a été calculée, et `0` est une valeur explicite. Les réponses d’un point instantané exposent la dernière puissance valide en watts.
+- `sourceFeedId` est facultatif et désigne une arrivée du même site. L’origine énergétique est celle déclarée avec le relevé. Pour un delta cumulatif, une arrivée identique aux deux bornes permet l’attribution. Une attribution absente ou un changement d’arrivée dans le delta donne `UNKNOWN`. Le solaire et la batterie apparaissent sous leurs types respectifs. Les points d’export restent consultables séparément.
+- Les routes Énergie historiques conservent leur contrat. `/energy/consumption` utilise le fuseau du site, avec UTC comme repli explicite si celui-ci est inconnu. Leur série `energy_kwh` garde la convention historique des valeurs par intervalle, sans conversion rétroactive des index dont la nature est inconnue. Les données V2 sont dans la même hypertable, avec des métadonnées propres aux points. Les relevés et exports CSV historiques gardent leur périmètre.
+
+Installer la migration Prisma du fuseau et exécuter `infrastructure/scripts/01_schema.sql` sur la même **base de test isolée** pour ajouter les colonnes et index TimescaleDB. Pour inclure le test HTTP et SQL V2 dans la recette, lancer `AFRIXORA_TEST_TIMESCALE=true npm test` depuis `backend` après ces deux opérations.
+
 ## Tests backend
 
 Les tests unitaires RBAC et les tests d’intégration HTTP s’exécutent avec `npm test` depuis `backend`. Les tests HTTP utilisent une base PostgreSQL de test dédiée, déjà créée. Prisma y applique les migrations avant l’exécution. Le seed, TimescaleDB, Redis et MQTT ne sont pas requis.

@@ -8,6 +8,7 @@ import { createApp } from '../src/app';
 import { prisma } from '../src/utils/database';
 import * as database from '../src/utils/database';
 import { routePath } from '../src/utils/requestRoute';
+import { persistTelemetry, type Telemetry } from '../src/services/energyTelemetry';
 import { createEnergyTopologyFixture } from './fixtures/energyTopology';
 
 vi.mock('../src/utils/redis', () => ({ default: {}, isRedisConnected: () => false }));
@@ -569,8 +570,14 @@ describe('API de topologie par bâtiment', () => {
     const bus = { name: 'Bus du site affecté' };
 
     await app.post(base + '/buses').set('Authorization', siteAuthorization).send(bus).expect(403);
+    const buildingPath = api + '/buildings/' + local.buildingId;
+    await app.patch(buildingPath).set('Authorization', siteAuthorization)
+      .send({ timeZone: 'Africa/Kinshasa' }).expect(403);
     await app.put(grant).set('Authorization', authorization).expect(204);
     await app.put(grant).set('Authorization', authorization).expect(204);
+    await app.patch(buildingPath).set('Authorization', siteAuthorization).send({ timeZone: 'Mars/Olympus' }).expect(400);
+    await app.patch(buildingPath).set('Authorization', siteAuthorization).send({ timeZone: 'Africa/Lubumbashi' })
+      .expect(200).expect(({ body }) => expect(body.timeZone).toBe('Africa/Lubumbashi'));
     const { body: created } = await app.post(base + '/buses').set('Authorization', siteAuthorization).send(bus).expect(201);
     await app.get(root(second.id) + '/buses').set('Authorization', siteAuthorization).expect(403);
     await app.put(otherGrant).set('Authorization', siteAuthorization).expect(403);
@@ -678,4 +685,66 @@ describe('API de topologie par bâtiment', () => {
     expect(children).toBe(archive.status === 204 ? 0 : 1);
     expect(Boolean(parent.archivedAt)).toBe(archive.status === 204);
   });
+});
+
+describe.runIf(process.env.AFRIXORA_TEST_TIMESCALE === 'true')('Mesures V2 sur TimescaleDB', () => {
+  it('persiste une seule fois et calcule 100 kWh au général malgré un sous-compteur à 40 kWh', async () => {
+    const site = { tenantId: local.id, buildingId: local.buildingId };
+    const topology = await prisma.$transaction(tx => createEnergyTopologyFixture(tx, site));
+    const elsewhere = await prisma.$transaction(tx => createEnergyTopologyFixture(tx, {
+      tenantId: foreign.id, buildingId: foreign.buildingId,
+    }));
+    const pv = await prisma.energySource.create({ data: { ...site, name: 'PV fictif', type: 'PV_INVERTER' } });
+    const feed = await prisma.sourceFeed.create({ data: {
+      ...site, name: 'Arrivée solaire', busId: topology.bus.id, sourceId: pv.id,
+    } });
+    const device = await prisma.device.create({ data: { ...site, name: 'Compteur', type: 'ENERGY_METER' } });
+    const point = { ...site, deviceId: device.id, unit: 'kWh', measurementMode: 'CUMULATIVE', flowDirection: 'IMPORT' } as const;
+    const main = await prisma.meteringPoint.create({ data: { ...point, name: 'Général', scope: 'BOARD', boardId: topology.board.id } });
+    const sub = await prisma.meteringPoint.create({ data: { ...point, name: 'Sous-compteur', scope: 'CIRCUIT', circuitId: topology.circuit.id } });
+    const scope = { ...site, deviceId: device.id };
+    const receivedAt = Date.now();
+    const bootId = randomUUID();
+    const reading = (meteringPointId: string, sequence: number, value: number, sourceFeedId?: string): Telemetry => ({
+      schemaVersion: 2, deviceId: device.id, meteringPointId, bootId, sequence, value, sourceFeedId,
+      capturedAt: new Date(receivedAt - 600_000 + sequence * 60_000).toISOString(),
+      metric: 'energy', unit: 'kWh', measurementMode: 'CUMULATIVE', quality: 'MEASURED', origin: 'DEVICE',
+    });
+
+    try {
+      const first = reading(main.id, 0, 0, topology.feed.id);
+      expect(await Promise.all([persistTelemetry(scope, first, receivedAt), persistTelemetry(scope, first, receivedAt)]))
+        .toEqual(expect.arrayContaining(['stored', 'duplicate']));
+      expect(await persistTelemetry(scope, { ...first, capturedAt: new Date(receivedAt).toISOString() }, receivedAt)).toBe('duplicate');
+      expect(await persistTelemetry(scope, reading(main.id, 1, 60, topology.feed.id), receivedAt)).toBe('stored');
+      expect(await persistTelemetry(scope, reading(main.id, 2, 100, feed.id), receivedAt)).toBe('stored');
+      expect(await persistTelemetry(scope, reading(main.id, 3, 200, elsewhere.feed.id), receivedAt)).toBe('rejected');
+      expect(await persistTelemetry(scope, reading(sub.id, 0, 0), receivedAt)).toBe('stored');
+      expect(await persistTelemetry(scope, reading(sub.id, 1, 40), receivedAt)).toBe('stored');
+
+      const route = api + '/energy/metered';
+      const query = { buildingId: local.buildingId, meteringPointId: main.id, buildingTotal: 'true',
+        from: first.capturedAt, to: new Date(receivedAt).toISOString() };
+      const { body } = await app.get(route).set('Authorization', authorization).query(query).expect(200);
+      expect(body).toMatchObject({
+        measuredKWh: 100, estimatedKWh: null, timeZone: 'Africa/Lubumbashi', samples: 2,
+        bySource: expect.arrayContaining([
+          expect.objectContaining({ sourceType: 'GRID', measuredKWh: 60 }),
+          expect.objectContaining({ sourceType: 'UNKNOWN', measuredKWh: 40 }),
+        ]),
+      });
+      await app.get(route).set('Authorization', authorization).query({ ...query, meteringPointId: sub.id }).expect(400);
+      await app.get(route).set('Authorization', authorization).query({
+        ...query, meteringPointId: sub.id, buildingTotal: 'false',
+      }).expect(200).expect(({ body }) => expect(body.measuredKWh).toBe(40));
+      await app.get(route).set('Authorization', operatorAuthorization).query(query).expect(403);
+      await app.get(route).set('Authorization', await bearer(foreign.email)).query(query).expect(404);
+      await app.get(api + '/readings').set('Authorization', authorization)
+        .query({ deviceId: device.id, metric: 'energy', from: query.from, to: query.to }).expect(200)
+        .expect(({ body }) => expect(body.total).toBe(0));
+    } finally {
+      await prisma.$executeRaw`DELETE FROM public.sensor_readings WHERE tenant_id = ${local.id}::uuid
+        AND device_id = ${device.id}::uuid AND metering_point_id IS NOT NULL`;
+    }
+  }, 30_000);
 });

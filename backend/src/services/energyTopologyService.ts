@@ -32,7 +32,7 @@ type Site = { tenantId: string; buildingId: string };
 const conflict = (message: string) => new AppError(message, 409, 'TOPOLOGY_CONFLICT');
 const invalid = (message: string) => new AppError(message, 400, 'INVALID_TOPOLOGY');
 
-async function onSite<T>(actor: Actor, buildingId: string, access: 'read' | 'write' | 'grant',
+export async function onSite<T>(actor: Actor, buildingId: string, access: 'read' | 'write' | 'grant',
   work: (tx: Tx, site: Site) => Promise<T>) {
   try {
     return await prisma.$transaction(async tx => {

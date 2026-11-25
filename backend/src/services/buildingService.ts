@@ -1,6 +1,7 @@
 import { Prisma, type ZoneType } from '@prisma/client';
 import { prisma } from '../utils/database';
 import { NotFoundError } from '../utils/errors';
+import { onSite } from './energyTopologyService';
 
 interface BuildingFilters {
   name?: string;
@@ -15,6 +16,7 @@ interface BuildingCreateData {
   name: string;
   address?: string;
   city?: string;
+  timeZone?: string | null;
   unitsCount?: number;
   config?: Prisma.InputJsonValue;
 }
@@ -23,6 +25,7 @@ interface BuildingUpdateData {
   name?: string;
   address?: string;
   city?: string;
+  timeZone?: string | null;
   unitsCount?: number;
   config?: Prisma.InputJsonValue;
   isActive?: boolean;
@@ -37,9 +40,10 @@ interface ZoneCreateData {
 export async function requireActiveBuilding(id: string, tenantId: string) {
   const building = await prisma.building.findUnique({
     where: { id, tenantId, isActive: true },
-    select: { id: true },
+    select: { city: true, timeZone: true },
   });
   if (!building) throw new NotFoundError('Bâtiment introuvable');
+  return building;
 }
 
 export default {
@@ -71,6 +75,7 @@ export default {
         name: data.name,
         address: data.address || '',
         city: data.city || 'Lubumbashi',
+        timeZone: data.timeZone,
         unitsCount: data.unitsCount || 0,
         tenantId,
         config: data.config || {},
@@ -78,11 +83,12 @@ export default {
     });
   },
 
-  async update(id: string, data: BuildingUpdateData, tenantId: string) {
-    return prisma.building.update({
-      where: { id, tenantId },
-      data,
-    });
+  async update(id: string, data: BuildingUpdateData, actor: Parameters<typeof onSite>[0]) {
+    const where = { id, tenantId: actor.tenantId };
+    if (data.timeZone !== undefined) {
+      return onSite(actor, id, 'write', tx => tx.building.update({ where, data }));
+    }
+    return prisma.building.update({ where, data });
   },
 
   async softDelete(id: string, tenantId: string) {

@@ -7,6 +7,7 @@ import logger from '../utils/logger';
 import { prisma, query } from '../utils/database';
 import { getRedisClient, isRedisConnected } from '../utils/redis';
 import automationEngine from './automationEngine';
+import { parseTelemetry, persistTelemetry, telemetrySchema, type Telemetry } from './energyTelemetry';
 
 let mqttClient: mqtt.MqttClient | null = null;
 let subscriptionsReady = false;
@@ -28,6 +29,7 @@ const MAX_PAYLOAD_BYTES = 64 * 1024;
 
 type DeviceScope = { tenantId: string; buildingId: string; deviceId: string };
 type Measurement = DeviceScope & { metric: string; value: number; unit: string | null };
+type BufferedMeasurement = Measurement & { telemetry?: Telemetry; telemetryReceivedAt?: number };
 
 const deviceCache = new Map<string, { expiresAt: number; verified: Promise<boolean> }>();
 const isoTimestamp = z.string().datetime({ offset: true });
@@ -50,6 +52,8 @@ const bufferedEntrySchema = z.object({
   value: z.unknown(),
   unit: z.unknown(),
   timestamp: z.union([z.string(), z.number().int()]),
+  telemetry: telemetrySchema.optional(),
+  telemetryReceivedAt: z.number().int().nonnegative().optional(),
   queuedAt: z.number().int().nonnegative().optional(),
   nextRetryAt: z.number().int().nonnegative().optional(),
   retryCount: z.number().int().nonnegative().default(0),
@@ -197,7 +201,7 @@ export function publishMqtt(topic: string, payload: unknown, expiresAt: Date): P
   });
 }
 
-async function bufferMessage(reading: Measurement, time: Date): Promise<void> {
+async function bufferMessage(reading: BufferedMeasurement, time: Date): Promise<void> {
   const { tenantId, deviceId, metric } = reading;
   try {
     const queuedAt = Date.now();
@@ -269,7 +273,14 @@ async function retryEntry(key: string, raw: string, token: string): Promise<void
       );
       if (current !== 1) return;
       try {
-        if (!await insertReading({ ...entry, value, unit: metricUnit(entry.unit) }, time)) {
+        if (entry.telemetry) {
+          const receivedAt = entry.telemetryReceivedAt;
+          if (receivedAt === undefined || !parseTelemetry(entry.telemetry, entry, receivedAt)) {
+            discarded = 'télémétrie V2 invalide';
+          } else if (await persistTelemetry(entry, entry.telemetry, receivedAt) === 'rejected') {
+            discarded = 'point de mesure hors du périmètre ou incompatible';
+          }
+        } else if (!await insertReading({ ...entry, value, unit: metricUnit(entry.unit) }, time)) {
           discarded = 'appareil hors du périmètre';
         }
       } catch {
@@ -445,10 +456,6 @@ export const connectMQTT = (io: Server): void => {
       }
 
       const scope = { tenantId, buildingId, deviceId: id };
-      if (isDeviceMessage && !await belongsToScope(scope)) {
-        logger.warn('mqtt_device_scope_rejected', scope);
-        return;
-      }
       const payloadData: unknown = JSON.parse(payload.toString());
       if (!isRecord(payloadData)) {
         logger.warn('mqtt_payload_invalid', scope);
@@ -456,6 +463,14 @@ export const connectMQTT = (io: Server): void => {
       }
 
       if (isDeviceMessage) {
+        if (kind === 'readings' && payloadData.schemaVersion !== undefined && payloadData.schemaVersion !== 1) {
+          if (!packet?.retain) await handleVersionedReading(scope, payloadData, receivedAt);
+          return;
+        }
+        if (!await belongsToScope(scope)) {
+          logger.warn('mqtt_device_scope_rejected', scope);
+          return;
+        }
         if (kind === 'readings') {
           await handleDeviceReadings(scope, payloadData, receivedAt, io);
         } else if (payloadData.type === 'command_ack') {
@@ -540,6 +555,30 @@ async function markDeviceSeen(scope: DeviceScope): Promise<boolean> {
   deviceCache.delete(deviceCacheKey(scope));
   logger.warn('Appareil MQTT introuvable lors de la mise à jour du statut', scope);
   return false;
+}
+
+async function handleVersionedReading(scope: DeviceScope, payload: unknown, receivedAt: number): Promise<void> {
+  const telemetry = parseTelemetry(payload, scope, receivedAt);
+  if (!telemetry) {
+    logger.warn('mqtt_telemetry_v2_invalid', scope);
+    return;
+  }
+
+  let result;
+  try {
+    result = await persistTelemetry(scope, telemetry, receivedAt);
+  } catch (error) {
+    logger.error('mqtt_telemetry_v2_insert_failed', { ...scope, errorType: (error as Error).name });
+    const { metric, value, unit } = telemetry;
+    await bufferMessage({ ...scope, metric, value, unit, telemetry, telemetryReceivedAt: receivedAt }, new Date(telemetry.capturedAt));
+    return;
+  }
+
+  if (result === 'rejected') {
+    logger.warn('mqtt_telemetry_v2_scope_or_mode_rejected', scope);
+  } else if (result === 'stored') {
+    await markDeviceSeen(scope);
+  }
 }
 
 async function handleDeviceReadings(
