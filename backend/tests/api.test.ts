@@ -1,16 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import { Role } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import type { RequestHandler } from 'express';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app';
 import { prisma } from '../src/utils/database';
 import * as database from '../src/utils/database';
+import { routePath } from '../src/utils/requestRoute';
 import { createEnergyTopologyFixture } from './fixtures/energyTopology';
 
 vi.mock('../src/utils/redis', () => ({ default: {}, isRedisConnected: () => false }));
+const recordRoute = vi.hoisted(() => vi.fn());
 vi.mock('../src/middleware/requestLogger', () => ({
-  requestLogger: vi.fn((_req, _res, next: () => void) => next()),
+  requestLogger: vi.fn<RequestHandler>((req, res, next) => {
+    res.on('finish', () => recordRoute(routePath(req), res.statusCode));
+    next();
+  }),
 }));
 vi.mock('../src/utils/logger', () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -525,5 +531,151 @@ describe('Validation Zod', () => {
         expect.objectContaining({ path: ['body', 'password'] }),
       ]),
     });
+  });
+});
+
+describe('API de topologie par bâtiment', () => {
+  const root = (building: string) => `${api}/energy/buildings/${building}/topology`;
+  const base = root(local.buildingId);
+  const sourcesTemplate = api + '/energy/buildings/:buildingId/topology/sources';
+
+  it('protège les sites et applique les affectations et leur révocation', async () => {
+    const operator = await prisma.user.findFirstOrThrow({ where: { role: 'OPERATOR', tenantId: local.id } });
+    const path = base + '/access/' + operator.id;
+    recordRoute.mockClear();
+    await app.get(base + '/sources').expect(401);
+    expect(recordRoute).toHaveBeenCalledWith(sourcesTemplate, 401);
+    await app.get(root(foreign.buildingId) + '/sources').set('Authorization', authorization).expect(404);
+    await app.get(base + '/sources').set('Authorization', operatorAuthorization).expect(403);
+    await app.put(path).set('Authorization', authorization).expect(204);
+    await app.get(base + '/sources').set('Authorization', operatorAuthorization).expect(200);
+    expect(recordRoute).toHaveBeenCalledWith(sourcesTemplate, 200);
+    await app.post(base + '/buses').set('Authorization', operatorAuthorization).send({ name: 'Bus' }).expect(403);
+    await app.put(base + '/access/' + foreign.userId).set('Authorization', authorization).expect(404);
+    await app.delete(path).set('Authorization', authorization).expect(204);
+    await app.get(base + '/sources').set('Authorization', operatorAuthorization).expect(403);
+  });
+  it('limite un administrateur de bâtiment au site affecté et laisse les routes historiques accessibles', async () => {
+    const second = await prisma.building.create({ data: {
+      tenantId: local.id, name: 'Deuxième site fictif', address: 'Adresse de test',
+    } });
+    const admin = await prisma.user.create({ data: {
+      tenantId: local.id, name: 'Administrateur de site', email: randomUUID() + '@example.test',
+      role: 'BUILDING_ADMIN', passwordHash: await bcrypt.hash(password, 4),
+    } });
+    const siteAuthorization = await bearer(admin.email);
+    const grant = base + '/access/' + admin.id;
+    const otherGrant = root(second.id) + '/access/' + admin.id;
+    const bus = { name: 'Bus du site affecté' };
+
+    await app.post(base + '/buses').set('Authorization', siteAuthorization).send(bus).expect(403);
+    await app.put(grant).set('Authorization', authorization).expect(204);
+    await app.put(grant).set('Authorization', authorization).expect(204);
+    const { body: created } = await app.post(base + '/buses').set('Authorization', siteAuthorization).send(bus).expect(201);
+    await app.get(root(second.id) + '/buses').set('Authorization', siteAuthorization).expect(403);
+    await app.put(otherGrant).set('Authorization', siteAuthorization).expect(403);
+    await app.get(root(second.id) + '/buses/' + created.id).set('Authorization', authorization).expect(404);
+    await app.post(root(second.id) + '/boards').set('Authorization', authorization)
+      .send({ name: 'Tableau', busId: created.id }).expect(404);
+    await app.delete(grant).set('Authorization', authorization).expect(204);
+    await app.delete(grant).set('Authorization', authorization).expect(204);
+    await app.patch(base + '/buses/' + created.id).set('Authorization', siteAuthorization)
+      .send({ name: 'Bus renommé' }).expect(403);
+    await app.get(api + '/buildings/' + second.id).set('Authorization', siteAuthorization).expect(200);
+  });
+
+  it('préserve les quatre lectures Énergie avec une clé API valide et réserve la topologie au JWT', async () => {
+    const { body } = await app.post(api + '/api-keys').set('Authorization', authorization)
+      .send({ name: 'Clé Énergie fictive', scope: 'read' }).expect(201);
+    const query = vi.spyOn(database, 'query').mockResolvedValue({
+      command: 'SELECT', rowCount: 1, oid: 0, fields: [],
+      rows: [{ total_kwh: 0, peak_power_w: 0, avg_power_w: 0, device_count: 0, value: 0 }],
+    });
+    try {
+      await app.get(base + '/sources').set('X-Api-Key', body.key).expect(401);
+      expect(query).not.toHaveBeenCalled();
+      for (const route of ['summary', 'consumption', 'by-device', 'by-zone']) {
+        await app.get(api + '/energy/' + route).set('X-Api-Key', body.key)
+          .query({ buildingId: local.buildingId, period: '24h' }).expect(200);
+      }
+      expect(query).toHaveBeenCalledTimes(5);
+      for (const [, params] of query.mock.calls) {
+        expect(params?.slice(0, 2)).toEqual([local.id, local.buildingId]);
+      }
+    } finally {
+      query.mockRestore();
+    }
+  });
+
+  it('crée toute la chaîne, refuse les références étrangères et archive dans l’ordre des dépendances', async () => {
+    publishCommand.mockClear();
+    const commandCount = await prisma.deviceCommand.count({ where: { tenantId: local.id } });
+    const post = (resource: string, data: object) => app.post(base + '/' + resource).set('Authorization', authorization).send(data);
+    const create = async (resource: string, data: object) => (await post(resource, data).expect(201)).body.id as string;
+    const sourceId = await create('sources', { name: 'Réseau test', type: 'GRID' });
+    const busId = await create('buses', { name: 'Bus test' });
+    const feedId = await create('feeds', { name: 'Arrivée', sourceId, busId });
+    const boardId = await create('boards', { name: 'Tableau', busId });
+    const circuit = { name: 'Départ', boardId, code: 'D1', priority: 'IMPORTANT' };
+    const circuitId = await create('circuits', circuit);
+    await post('circuits', circuit).expect(409);
+    await post('circuits', { ...circuit, code: 'D2', priority: 'CRITICAL',
+      isControllable: true, autoSheddingAllowed: true }).expect(400);
+    const loadId = await create('loads', { name: 'Lampe', circuitId, category: 'LIGHTING', priority: 'FLEXIBLE' });
+    const device = await prisma.device.create({ data: { tenantId: local.id, buildingId: local.buildingId, type: 'ENERGY_METER', name: 'Compteur' } });
+    const point = { name: 'Point', scope: 'FEED', feedId, deviceId: device.id, measurementMode: 'INTERVAL', unit: 'Wh' };
+    const pointId = await create('metering-points', point);
+    await post('metering-points', { ...point, sourceId }).expect(400);
+    await post('metering-points', { ...point, deviceId: local.deviceId }).expect(400);
+    await post('metering-points', { ...point, deviceId: foreign.deviceId }).expect(404);
+    const endpoint = { name: 'Canal', targetLoadId: loadId, deviceId: local.deviceId };
+    const { body: canal } = await post('control-endpoints', endpoint).expect(201);
+    expect(canal).toMatchObject({ isEnabled: false, approvalStatus: 'PENDING', verifiedState: 'UNKNOWN' });
+    await post('control-endpoints', { ...endpoint, targetCircuitId: circuitId }).expect(400);
+    await post('control-endpoints', { ...endpoint, verifiedState: 'ON' }).expect(400);
+    await app.patch(base + '/control-endpoints/' + canal.id).set('Authorization', authorization)
+      .send({ isEnabled: true }).expect(400);
+    await post('buses', { name: 'Bus', tenantId: foreign.id }).expect(400);
+    const source = base + '/sources/' + sourceId;
+    await app.patch(source).set('Authorization', authorization).send({ name: 'Réseau renommé' }).expect(200);
+    await app.delete(source).set('Authorization', authorization).expect(409);
+    const foreignAuthorization = await bearer(foreign.email);
+    await app.get(source).set('Authorization', foreignAuthorization).expect(404);
+    await app.patch(source).set('Authorization', foreignAuthorization).send({ name: 'Autre' }).expect(404);
+    await app.delete(source).set('Authorization', foreignAuthorization).expect(404);
+    await app.get(root(foreign.buildingId) + '/sources/' + sourceId).set('Authorization', foreignAuthorization).expect(404);
+    const single = await create('buses', { name: 'Bus isolé' });
+    await app.delete(base + '/buses/' + single).set('Authorization', authorization).expect(204);
+    const archived = await app.get(base + '/buses?archived=true&limit=1').set('Authorization', authorization).expect(200);
+    expect(archived.body.data[0].id).toBe(single);
+    await post('boards', { name: 'Autre', busId: single }).expect(404);
+    const initialResources = [
+      ['control-endpoints', canal.id], ['metering-points', pointId], ['loads', loadId],
+      ['circuits', circuitId], ['boards', boardId], ['feeds', feedId], ['buses', busId], ['sources', sourceId],
+    ];
+    for (const [resource, id] of initialResources) {
+      await app.delete(base + '/' + resource + '/' + id).set('Authorization', authorization).expect(204);
+    }
+    await app.get(source).set('Authorization', authorization).expect(200)
+      .expect(({ body }) => expect(body.archivedAt).toEqual(expect.any(String)));
+    await app.patch(source).set('Authorization', authorization).send({ name: 'Source archivée' }).expect(409);
+    expect(publishCommand).not.toHaveBeenCalled();
+    expect(await prisma.deviceCommand.count({ where: { tenantId: local.id } })).toBe(commandCount);
+  });
+
+  it('empêche un tableau actif de référencer un bus archivé lors de mutations concurrentes', async () => {
+    const { body: bus } = await app.post(base + '/buses').set('Authorization', authorization)
+      .send({ name: 'Bus pour le test concurrent' }).expect(201);
+    const [archive, create] = await Promise.all([
+      app.delete(base + '/buses/' + bus.id).set('Authorization', authorization),
+      app.post(base + '/boards').set('Authorization', authorization).send({ name: 'Tableau concurrent', busId: bus.id }),
+    ]);
+    expect([[204, 404], [204, 409], [409, 201]]).toContainEqual([archive.status, create.status]);
+    const [parent, children] = await Promise.all([
+      prisma.energyBus.findUniqueOrThrow({ where: { id: bus.id } }),
+      prisma.distributionBoard.count({ where: { busId: bus.id, archivedAt: null } }),
+    ]);
+    expect(children).toBe(archive.status === 204 ? 0 : 1);
+    expect(Boolean(parent.archivedAt)).toBe(archive.status === 204);
   });
 });

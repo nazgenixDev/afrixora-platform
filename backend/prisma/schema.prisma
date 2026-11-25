@@ -199,6 +199,7 @@ model Tenant {
 }
 
 model User {
+  buildingAccess BuildingAccess[]
   id           String   @id @default(uuid())
   tenantId     String
   tenant       Tenant   @relation(fields: [tenantId], references: [id])
@@ -210,10 +211,12 @@ model User {
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
 
+  @@unique([id, tenantId])
   @@index([tenantId])
 }
 
 model Building {
+  buildingAccess BuildingAccess[]
   id                 String              @id @default(uuid())
   tenantId           String
   tenant             Tenant              @relation(fields: [tenantId], references: [id])
@@ -322,6 +325,7 @@ model DeviceCommand {
 }
 
 model EnergySource {
+  archivedAt DateTime?
   id             String             @id @default(uuid())
   tenantId       String
   buildingId     String
@@ -340,6 +344,7 @@ model EnergySource {
 }
 
 model EnergyBus {
+  archivedAt DateTime?
   id                 String              @id @default(uuid())
   tenantId           String
   buildingId         String
@@ -354,6 +359,7 @@ model EnergyBus {
 }
 
 model SourceFeed {
+  archivedAt DateTime?
   id                 String            @id @default(uuid())
   tenantId           String
   buildingId         String
@@ -377,6 +383,7 @@ model SourceFeed {
 }
 
 model DistributionBoard {
+  archivedAt DateTime?
   id                 String                       @id @default(uuid())
   tenantId           String
   buildingId         String
@@ -396,6 +403,7 @@ model DistributionBoard {
 }
 
 model Circuit {
+  archivedAt DateTime?
   id                      String                       @id @default(uuid())
   tenantId                String
   buildingId              String
@@ -424,6 +432,7 @@ model Circuit {
 }
 
 model ElectricalLoad {
+  archivedAt DateTime?
   id                      String                 @id @default(uuid())
   tenantId                String
   buildingId              String
@@ -454,6 +463,7 @@ model ElectricalLoad {
 
 // La portée et son unique cible sont vérifiées dans la migration SQL.
 model MeteringPoint {
+  archivedAt DateTime?
   id              String                @id @default(uuid())
   tenantId        String
   buildingId      String
@@ -491,6 +501,7 @@ model MeteringPoint {
 
 // L’approbation du canal et la vérification physique décrivent deux faits distincts.
 model ControlEndpoint {
+  archivedAt DateTime?
   id                         String                    @id @default(uuid())
   tenantId                   String
   buildingId                 String
@@ -615,4 +626,15 @@ model SubscriptionHistory {
   createdAt         DateTime           @default(now())
 
   @@index([tenantId])
+}
+
+model BuildingAccess {
+  tenantId   String
+  buildingId String
+  userId     String
+  building   Building @relation(fields: [buildingId, tenantId], references: [id, tenantId], onDelete: Cascade, onUpdate: Restrict)
+  user       User     @relation(fields: [userId, tenantId], references: [id, tenantId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@id([tenantId, buildingId, userId])
+  @@index([userId, tenantId])
 }

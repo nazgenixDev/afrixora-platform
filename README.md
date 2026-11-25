@@ -42,6 +42,47 @@ Depuis le tableau de bord, ouvrez **Énergie** pour lire les mesures, marquez un
 
 La configuration de production isole PostgreSQL, Redis et MQTT sur des réseaux dédiés. La surcharge de développement publie des ports sur la boucle locale pour les outils du poste. [Configuration de production](docker-compose.yml) · [Surcharge de développement](docker-compose.dev.yml)
 
+## API de topologie énergétique
+
+Préfixe commun `/api/v1/energy/buildings/:buildingId/topology`. Utiliser une session JWT par cookie ou un jeton Bearer issu de `POST /api/v1/auth/token`. Les écritures par cookie exigent une origine autorisée. Le serveur déduit le tenant de la session et vérifie que le bâtiment est actif.
+
+| Rôle | Autorisations sur la topologie |
+|---|---|
+| `SUPER_ADMIN`, `TENANT_ADMIN` | Lecture, écriture et gestion des affectations dans le tenant sélectionné |
+| `BUILDING_ADMIN` | Lecture, écriture et archivage dans les bâtiments attribués |
+| `OPERATOR`, `VIEWER` | Lecture dans les bâtiments attribués |
+
+`PUT /access/:userId` attribue le bâtiment à un utilisateur du tenant. `DELETE /access/:userId` révoque cette affectation. Les deux opérations sont idempotentes et renvoient `204`, avec un corps vide ou `{}` en entrée. Les affectations s’appliquent à la topologie. Les API historiques et Socket.IO conservent leurs règles d’accès.
+
+| Méthode et suffixe | Résultat |
+|---|---|
+| `GET /:ressource` | `200`, liste paginée |
+| `GET /:ressource/:id` | `200`, détail de la ressource, avec `archivedAt` si archivée |
+| `POST /:ressource` | `201`, ressource créée |
+| `PATCH /:ressource/:id` | `200`, ressource mise à jour. Fournir au moins un champ modifiable |
+| `DELETE /:ressource/:id` | `204`, archivage idempotent. Archiver d’abord les dépendances actives |
+
+Les listes acceptent `page` (défaut 1), `limit` (1 à 100, défaut 50), `search` (nom, sans distinction de casse) et `archived` (`false` pour les ressources actives, `true` pour les archives). Elles renvoient `{ data, total, page, totalPages }`. Le code d’un circuit reste réservé dans son bâtiment après archivage.
+
+Exemples fictifs de corps `POST`. Remplacer les UUID de référence par ceux renvoyés lors des créations précédentes ou par ceux des appareils et zones du même bâtiment.
+
+| Ressource | Corps JSON |
+|---|---|
+| `sources` | `{"name":"Réseau fictif","type":"GRID","ratedPowerW":12000}` |
+| `buses` | `{"name":"Bus principal"}` |
+| `feeds` | `{"name":"Arrivée principale","sourceId":"00000000-0000-4000-8000-000000000001","busId":"00000000-0000-4000-8000-000000000002"}` |
+| `boards` | `{"name":"Tableau principal","busId":"00000000-0000-4000-8000-000000000002","nominalVoltageV":230}` |
+| `circuits` | `{"name":"Éclairage","boardId":"00000000-0000-4000-8000-000000000004","code":"ECL-01","priority":"FLEXIBLE"}` |
+| `loads` | `{"name":"Éclairage du hall","circuitId":"00000000-0000-4000-8000-000000000005","category":"LIGHTING","priority":"FLEXIBLE"}` |
+| `metering-points` | `{"name":"Compteur général","deviceId":"00000000-0000-4000-8000-000000000007","scope":"FEED","feedId":"00000000-0000-4000-8000-000000000003","measurementMode":"CUMULATIVE","unit":"Wh"}` |
+| `control-endpoints` | `{"name":"Canal déclaré","deviceId":"00000000-0000-4000-8000-000000000008","targetLoadId":"00000000-0000-4000-8000-000000000006","declaredActions":["TURN_ON","TURN_OFF"]}` |
+
+Un point de mesure exige un appareil `ENERGY_METER` et une seule cible correspondant à `scope`. Un canal vise exactement un circuit ou une charge. Les déclarations de canal commencent en attente d’approbation, désactivées et avec un état physique inconnu. Les pouvoirs d’activation, les états vérifiés et les champs calculés sont exclus des écritures de cette API.
+
+`400` indique une entrée ou une combinaison de champs invalide, `401` une authentification requise, `403` un droit ou une origine insuffisante, `404` une ressource ou référence hors du périmètre accessible, et `409` un conflit, par exemple un code déjà utilisé ou une dépendance active lors d’un archivage.
+
+La migration `20261122030000_energy_topology_access_archive` ajoute les affectations et les dates d’archivage. Vérifier la lignée du journal de commandes avant la mise à niveau et renouveler les droits SQL du compte applicatif selon le guide. [Guide de déploiement](DEPLOYMENT.md)
+
 ## Tests backend
 
 Les tests unitaires RBAC et les tests d’intégration HTTP s’exécutent avec `npm test` depuis `backend`. Les tests HTTP utilisent une base PostgreSQL de test dédiée, déjà créée. Prisma y applique les migrations avant l’exécution. Le seed, TimescaleDB, Redis et MQTT ne sont pas requis.

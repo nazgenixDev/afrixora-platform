@@ -8,6 +8,7 @@ import buildingRoutes from './routes/buildings';
 import deviceRoutes from './routes/devices';
 import readingRoutes from './routes/readings';
 import energyRoutes from './routes/energy';
+import energyTopologyRoutes from './routes/energyTopology';
 import automationRoutes from './routes/automations';
 import alertRoutes from './routes/alerts';
 import reportRoutes from './routes/reports';
@@ -69,6 +70,7 @@ export function createApp(trustProxyHops: number, checkReadiness?: () => Promise
   apiRouter.use('/buildings', authenticateOrApiKey, buildingRoutes);
   apiRouter.use('/devices', authenticateOrApiKey, deviceRoutes);
   apiRouter.use('/readings', authenticateOrApiKey, readingRoutes);
+  apiRouter.use('/energy', energyTopologyRoutes);
   apiRouter.use('/energy', authenticateOrApiKey, energyRoutes);
   apiRouter.use('/reports', authenticateOrApiKey, reportRoutes);
 
