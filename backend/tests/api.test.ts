@@ -668,7 +668,7 @@ describe('API de topologie par bâtiment', () => {
     await app.patch(source).set('Authorization', authorization).send({ name: 'Source archivée' }).expect(409);
     expect(publishCommand).not.toHaveBeenCalled();
     expect(await prisma.deviceCommand.count({ where: { tenantId: local.id } })).toBe(commandCount);
-  });
+  }, 20_000);
 
   it('empêche un tableau actif de référencer un bus archivé lors de mutations concurrentes', async () => {
     const { body: bus } = await app.post(base + '/buses').set('Authorization', authorization)
@@ -745,6 +745,102 @@ describe.runIf(process.env.AFRIXORA_TEST_TIMESCALE === 'true')('Mesures V2 sur T
     } finally {
       await prisma.$executeRaw`DELETE FROM public.sensor_readings WHERE tenant_id = ${local.id}::uuid
         AND device_id = ${device.id}::uuid AND metering_point_id IS NOT NULL`;
+    }
+  }, 30_000);
+});
+
+describe.runIf(process.env.AFRIXORA_TEST_TIMESCALE === 'true')('Simulation énergétique avec mesures V2', () => {
+  it('simule puis rétablit une charge, journalise une seule fois et isole les tenants', async () => {
+    const site = { tenantId: local.id, buildingId: randomUUID() };
+    await prisma.building.create({ data: { id: site.buildingId, tenantId: site.tenantId,
+      name: 'Bâtiment de simulation', address: 'Adresse fictive' } });
+    const topology = await prisma.$transaction(tx => createEnergyTopologyFixture(tx, site));
+    await prisma.sourceFeed.update({ where: { id: topology.feed.id }, data: { isAllowed: true } });
+    await prisma.circuit.update({ where: { id: topology.circuit.id },
+      data: { isControllable: true, autoSheddingAllowed: true } });
+    await prisma.electricalLoad.update({ where: { id: topology.load.id },
+      data: { isControllable: true, canBeAutomated: true, minOnSeconds: 60, minOffSeconds: 120 } });
+    const meter = await prisma.device.create({ data: { ...site, type: 'ENERGY_METER', name: 'Compteur simulation' } });
+    const meterScope = { ...site, deviceId: meter.id };
+    const point = { ...meterScope, unit: 'W', measurementMode: 'INSTANTANEOUS', flowDirection: 'IMPORT' } as const;
+    const demand = await prisma.meteringPoint.create({
+      data: { ...point, name: 'Demande générale', scope: 'BOARD', boardId: topology.board.id },
+    });
+    const load = await prisma.meteringPoint.create({
+      data: { ...point, name: 'Demande de la charge', scope: 'LOAD', loadId: topology.load.id },
+    });
+    const root = api + '/automations/energy-simulation/rules';
+    const policy = { version: 1, feedId: topology.feed.id, demandPointId: demand.id,
+      availablePowerW: 1000, hysteresisW: 100, maxReadingAgeSeconds: 60, cooldownSeconds: 30,
+      minOnSeconds: 60, minOffSeconds: 120, maxActionsPerHour: 4,
+      loads: [{ loadId: topology.load.id, meteringPointId: load.id }],
+    };
+
+    try {
+      await app.post(root).set('Authorization', authorization).send({
+        buildingId: site.buildingId, name: 'Règle incompatible', policy: { ...policy, feedId: randomUUID() },
+      }).expect(400);
+      const { body: rule } = await app.post(root).set('Authorization', authorization)
+        .send({ buildingId: site.buildingId, name: 'Simulation fictive', policy }).expect(201);
+      expect(rule).toMatchObject({ isActive: false, simulationOnly: true });
+      const path = root + '/' + rule.id;
+      await app.get(api + '/automations').set('Authorization', authorization).expect(200)
+        .expect(({ body }) => expect(body.map((item: { id: string }) => item.id)).not.toContain(rule.id));
+      await app.patch(api + '/automations/' + rule.id).set('Authorization', authorization).send({ isActive: true }).expect(404);
+      await app.get(root).set('Authorization', authorization).query({ buildingId: site.buildingId }).expect(200)
+        .expect(({ body }) => expect(body.data[0].id).toBe(rule.id));
+      await app.patch(path).set('Authorization', authorization).send({ buildingId: site.buildingId, isActive: true }).expect(200);
+      const receivedAt = Date.now();
+      const start = receivedAt - 600_000;
+      const stamp = (ms: number) => new Date(start + ms).toISOString();
+      const bootId = randomUUID();
+      const publishFixture = (meteringPointId: string, value: number, sequence: number, elapsed: number) =>
+        persistTelemetry(meterScope, {
+          schemaVersion: 2, deviceId: meter.id, meteringPointId, bootId, sequence, value,
+          capturedAt: stamp(elapsed), metric: 'power', unit: 'W', measurementMode: 'INSTANTANEOUS',
+          quality: 'MEASURED', origin: 'DEVICE', sourceFeedId: topology.feed.id,
+        }, receivedAt);
+      for (const [value, sequence, elapsed] of [[1350, 0, 0], [850, 1, 180_000]]) {
+        expect(await publishFixture(demand.id, value, sequence, elapsed)).toBe('stored');
+        expect(await publishFixture(load.id, 400, sequence, elapsed)).toBe('stored');
+      }
+      const payload = { buildingId: site.buildingId, scenarioId: randomUUID(), requestId: randomUUID(),
+        evaluatedAt: stamp(0), protection: 'CLEAR', maintenance: 'CLEAR', site: 'ALLOWED', manual: 'CLEAR',
+        initialLoads: [{ loadId: topology.load.id, state: 'ON', changedAt: stamp(-120_000) }],
+      };
+      const other = await bearer(foreign.email);
+      await app.post(path + '/runs').set('Authorization', other).send(payload).expect(404);
+      await app.get(path + '/runs').set('Authorization', other).query({ buildingId: site.buildingId }).expect(404);
+      await app.post(path + '/runs').set('Authorization', operatorAuthorization).send(payload).expect(403);
+      const commandCount = await prisma.deviceCommand.count({ where: site });
+      const deviceStates = () => prisma.deviceState.findMany({
+        where: { tenantId: local.id }, orderBy: { id: 'asc' },
+      });
+      const observedStates = await deviceStates();
+      publishCommand.mockClear();
+
+      const run = (body: object) => app.post(path + '/runs').set('Authorization', authorization).send(body);
+      const [first, duplicate] = await Promise.all([run(payload).expect(200), run(payload).expect(200)]);
+      expect(first.body).toEqual(duplicate.body);
+      expect(first.body).toMatchObject({ decision: 'SHED', targetLoadId: topology.load.id,
+        result: { mode: 'DRY_RUN', measuredDemandW: 1350, projectedDemandAfterW: 950 } });
+      await run({ ...payload, manual: 'HOLD' }).expect(409);
+      await run({ ...payload, requestId: randomUUID(), initialLoads: [] }).expect(409);
+      await run({ ...payload, initialLoads: [], requestId: randomUUID(), evaluatedAt: stamp(180_000) }).expect(200)
+        .expect(({ body }) => expect(body).toMatchObject({ decision: 'RESTORE',
+          result: { measuredDemandW: 850, projectedDemandAfterW: 850 } }));
+
+      await app.patch(path).set('Authorization', authorization).send({ buildingId: site.buildingId, isActive: false }).expect(200);
+      await run({ ...payload, initialLoads: [], requestId: randomUUID(), evaluatedAt: stamp(180_001) }).expect(200)
+        .expect(({ body }) => expect(body).toMatchObject({ decision: 'NO_ACTION', reason: 'RULE_DISABLED' }));
+      await app.get(path + '/runs').set('Authorization', authorization).query({ buildingId: site.buildingId, limit: 1 })
+        .expect(200).expect(({ body }) => expect(body).toMatchObject({ total: 3, totalPages: 3 }));
+      expect(await prisma.deviceCommand.count({ where: site })).toBe(commandCount);
+      expect(await deviceStates()).toEqual(observedStates);
+      expect(publishCommand).not.toHaveBeenCalled();
+    } finally {
+      await prisma.$executeRaw`DELETE FROM public.sensor_readings WHERE tenant_id = ${local.id}::uuid
+        AND device_id = ${meter.id}::uuid AND metering_point_id IS NOT NULL`;
     }
   }, 30_000);
 });

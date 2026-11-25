@@ -123,6 +123,78 @@ Publier un échantillon par message sur `afrixora/{tenantId}/{buildingId}/device
 
 Installer la migration Prisma du fuseau et exécuter `infrastructure/scripts/01_schema.sql` sur la même **base de test isolée** pour ajouter les colonnes et index TimescaleDB. Pour inclure le test HTTP et SQL V2 dans la recette, lancer `AFRIXORA_TEST_TIMESCALE=true npm test` depuis `backend` après ces deux opérations.
 
+## Simulation énergétique V2
+
+Les routes privées sont sous `/api/v1/automations/energy-simulation`. Elles exigent un JWT et les droits du bâtiment. Les rôles `SUPER_ADMIN` et `TENANT_ADMIN` travaillent dans le tenant sélectionné. Le rôle `BUILDING_ADMIN` doit être affecté au site. Un appel à la simulation écrit uniquement l’historique `AutomationExecution` et la projection des charges.
+
+| Méthode | Chemin | Entrée |
+|---|---|---|
+| GET | `/rules` | `buildingId`, `page`, `limit` en query |
+| POST | `/rules` | `buildingId`, `name`, `policy`. La règle est créée désactivée |
+| PATCH | `/rules/:id` | `buildingId` et `isActive` |
+| POST | `/rules/:id/runs` | Instant, scénario, clé de rejeu et états hypothétiques |
+| GET | `/rules/:id/runs` | `buildingId`, `page`, `limit` en query |
+
+Une politique de version `1` configure `feedId`, `demandPointId`, `availablePowerW`, `hysteresisW`, `maxReadingAgeSeconds`, `cooldownSeconds`, `minOnSeconds`, `minOffSeconds`, `maxActionsPerHour` et la liste ordonnée `loads`. Chaque entrée fournit `loadId`, `meteringPointId` et éventuellement `maintenanceExcluded`. Le point de demande et les points des charges sont des points d’import instantanés en W ou kW, rattachés à la même arrivée et aux charges incluses dans le périmètre de mesure. Le plafond disponible est une hypothèse configurée. La puissance nominale de la source, lorsqu’elle est renseignée, borne ce plafond.
+
+Sur le site fictif, créer la règle avec le corps suivant, puis l’activer par `PATCH /rules/:id`. Remplacer les UUID et les dates par ceux du site de recette et de ses mesures.
+
+```json
+{
+  "buildingId": "00000000-0000-4000-8000-000000000001",
+  "name": "Simulation de surcharge",
+  "policy": {
+    "version": 1,
+    "feedId": "00000000-0000-4000-8000-000000000005",
+    "demandPointId": "00000000-0000-4000-8000-000000000006",
+    "availablePowerW": 1000,
+    "hysteresisW": 100,
+    "maxReadingAgeSeconds": 60,
+    "cooldownSeconds": 30,
+    "minOnSeconds": 60,
+    "minOffSeconds": 120,
+    "maxActionsPerHour": 4,
+    "loads": [
+      {
+        "loadId": "00000000-0000-4000-8000-000000000004",
+        "meteringPointId": "00000000-0000-4000-8000-000000000007"
+      }
+    ]
+  }
+}
+```
+
+Corps de la première évaluation :
+
+```json
+{
+  "buildingId": "00000000-0000-4000-8000-000000000001",
+  "scenarioId": "00000000-0000-4000-8000-000000000002",
+  "requestId": "00000000-0000-4000-8000-000000000003",
+  "evaluatedAt": "2026-11-26T10:00:00+02:00",
+  "protection": "CLEAR",
+  "maintenance": "CLEAR",
+  "site": "ALLOWED",
+  "manual": "CLEAR",
+  "initialLoads": [
+    {
+      "loadId": "00000000-0000-4000-8000-000000000004",
+      "state": "ON",
+      "changedAt": "2026-11-26T09:55:00+02:00"
+    }
+  ]
+}
+```
+
+- **Entrées et priorités.** Les quatre indicateurs décrivent des hypothèses du scénario et prennent la valeur `UNKNOWN` si omis. Le moteur applique l’ordre protection, maintenance, autorisation du site, priorité manuelle, puis règle de simulation. Une source non attribuée ou incohérente, une mesure absente, obsolète, invalide ou estimée conduit à l’abstention pour la décision concernée. Une mesure de 0 W reste valide.
+- **Délestage.** Le moteur propose au plus une action par évaluation, dans l’ordre des charges de la règle. Il ne sélectionne que les charges `FLEXIBLE` autorisées au niveau charge et circuit. Toute charge ou tout circuit `CRITICAL` est exclu. Les exclusions de maintenance, les temps minimaux et les limites horaires de la règle et des charges bornent les décisions dans un scénario.
+- **Retour à la normale.** Le scénario suit sa propre projection. Elle retranche la puissance mesurée des charges déjà délestées dans la simulation. Elle rétablit uniquement une charge que le scénario a délestée et vérifie que sa reprise prévue tient sous le plafond moins l’hystérésis. Le délai anti-oscillation s’applique aux deux sens. Le test suppose que la demande mesurée de référence reste indépendante des coupures simulées.
+- **Historique.** Les évaluations successives d’un scénario ont des dates strictement croissantes. Fournir `initialLoads` à la première évaluation. Un rejeu du même `requestId` dans le scénario renvoie la même exécution. Une demande différente avec la même clé renvoie `409`. L’historique expose la règle, les mesures, les hypothèses, les motifs et l’état projeté, identifié par `mode: DRY_RUN`.
+
+Avec une demande mesurée de **1 350 W**, un plafond de **1 000 W** et une charge flexible mesurée à **400 W** dont le temps de marche minimal est atteint, la décision `SHED` ramène la demande **projetée** à **950 W**. Quand la référence mesurée revient à **850 W**, la reprise est simulée après le temps d’arrêt minimal si elle reste sous le seuil de **900 W**, marge de 100 W incluse. État matériel et commandes demeurent indépendants du résultat simulé.
+
+La migration `20261126000000_add_automation_simulations` ajoute l’indicateur `simulationOnly` et l’historique des exécutions. Utiliser `AFRIXORA_TEST_TIMESCALE=true npm test` sur une base isolée pour inclure la recette HTTP avec mesures V2.
+
 ## Tests backend
 
 Les tests unitaires RBAC et les tests d’intégration HTTP s’exécutent avec `npm test` depuis `backend`. Les tests HTTP utilisent une base PostgreSQL de test dédiée, déjà créée. Prisma y applique les migrations avant l’exécution. Le seed, TimescaleDB, Redis et MQTT ne sont pas requis.

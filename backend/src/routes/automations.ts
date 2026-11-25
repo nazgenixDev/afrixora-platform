@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import automationSimulations from './automationSimulations';
 import automationService from '../services/automationService';
 import { authenticate } from '../middleware/authenticate';
 import { authorize } from '../middleware/authorize';
@@ -12,6 +13,7 @@ import {
 } from '../utils/automationSchemas';
 
 const router = Router();
+router.use('/energy-simulation', automationSimulations);
 
 router.get('/', authenticate, async (req, res, next) => {
   try {

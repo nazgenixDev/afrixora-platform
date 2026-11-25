@@ -534,19 +534,45 @@ model ControlEndpoint {
 }
 
 model Automation {
-  id          String    @id @default(uuid())
-  tenantId    String
-  buildingId  String
-  name        String
-  isActive    Boolean   @default(true)
-  trigger     Json
-  conditions  Json      @default("[]")
-  action      Json
-  lastFiredAt DateTime?
-  createdAt   DateTime  @default(now())
-  building    Building  @relation(fields: [buildingId], references: [id])
+  id             String                @id @default(uuid())
+  tenantId       String
+  buildingId     String
+  name           String
+  isActive       Boolean               @default(true)
+  simulationOnly Boolean               @default(false)
+  trigger        Json
+  conditions     Json                  @default("[]")
+  action         Json
+  lastFiredAt    DateTime?
+  createdAt      DateTime              @default(now())
+  building       Building              @relation(fields: [buildingId], references: [id])
+  simulations    AutomationExecution[]
 
+  @@unique([id, tenantId, buildingId])
   @@index([tenantId, buildingId, isActive])
+}
+
+model AutomationExecution {
+  id            String     @id @default(uuid())
+  tenantId      String
+  buildingId    String
+  automationId  String
+  scenarioId    String
+  requestId     String
+  requestHash   String
+  evaluatedAt   DateTime
+  createdAt     DateTime   @default(now())
+  inputSnapshot Json
+  decision      String
+  reason        String
+  result        Json
+  action        String?
+  targetLoadId  String?
+  automation    Automation @relation(fields: [automationId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([automationId, scenarioId, requestId])
+  @@unique([automationId, scenarioId, evaluatedAt])
+  @@index([tenantId, buildingId, automationId, evaluatedAt(sort: Desc)], map: "AutomationExecution_site_rule_time_idx")
 }
 
 model Alert {

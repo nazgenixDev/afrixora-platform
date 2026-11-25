@@ -27,6 +27,7 @@ export const evaluate = async (
         buildingId,
         building: { tenantId, isActive: true, tenant: { isActive: true } },
         isActive: true,
+        simulationOnly: false,
         trigger: { path: ['deviceId'], equals: deviceId }
       }
     });
