@@ -1,6 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { DeviceCommandProgress, DeviceEnergyDetails, type SentCommand } from "@/components/energy/DeviceEnergyDetails";
+import { commandLabels } from "@/lib/energyV2";
 import { Button } from "@/components/ui/button";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { Input } from "@/components/ui/input";
@@ -118,14 +121,16 @@ const AddDeviceDialog = ({
   );
 };
 
-const DevicesPage = () => {
+const DevicesPage = ({ deviceId }: { deviceId: string }) => {
   const [buildings, setBuildings] = useState<Building[]>([]);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(deviceId);
   const [filterType, setFilterType] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<string>("");
   const [viewMode, setViewMode] = useState<"table" | "grid">("table");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [drawerDevice, setDrawerDevice] = useState<Device | null>(null);
+  const [selectedDevice, setDrawerDevice] = useState<Device | null>(null);
+  const [dismissedDeviceLink, setDismissedDeviceLink] = useState(false);
+  const [latestCommands, setLatestCommands] = useState<Record<string, SentCommand>>({});
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [selectedBuildingId, setSelectedBuildingId] = useState<string>("");
   const [zones, setZones] = useState<Zone[]>([]);
@@ -137,6 +142,11 @@ const DevicesPage = () => {
   const { result, loading, error, setPage, reload } =
     usePaginatedList<Device>("/api/v1/devices", filters.toString());
   const devices = result?.data ?? [];
+  const drawerDevice = selectedDevice ?? (!dismissedDeviceLink && deviceId ? devices.find(device => device.id === deviceId) : null);
+  function closeDrawer() {
+    setDismissedDeviceLink(true);
+    setDrawerDevice(null);
+  }
 
   const user = useStore(state => state.user);
   const canEdit = user && ['SUPER_ADMIN', 'TENANT_ADMIN', 'BUILDING_ADMIN'].includes(user.role);
@@ -171,9 +181,10 @@ const DevicesPage = () => {
   };
 
   const sendCommand = async (id: string, on: boolean) => {
-    const { data } = await api.post<{ status: string }>(`/api/v1/devices/${id}/control`, {
+    const { data } = await api.post<SentCommand>(`/api/v1/devices/${id}/control`, {
       command: 'set_state', params: { state: on ? 'on' : 'off' },
     });
+    setLatestCommands(previous => ({ ...previous, [id]: data }));
     if (['FAILED', 'EXPIRED', 'REJECTED'].includes(data.status)) {
       throw new Error('La commande a échoué ou a expiré.');
     }
@@ -188,7 +199,7 @@ const DevicesPage = () => {
         toast.info('État déclaré par le boîtier.');
         reload();
       } else {
-        toast.info(status === 'ACKNOWLEDGED' ? 'Commande acquittée par le boîtier.' : 'Commande transmise au broker.');
+        toast.info(commandLabels[status] ?? 'Statut de commande inconnu.');
       }
     } catch (error) {
       logger.error(String(error));
@@ -280,7 +291,7 @@ const DevicesPage = () => {
       </div>
 
       {/* Stats Bar */}
-      <div className="grid grid-cols-5 gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
         {Object.entries(stats).map(([key, val]) => (
           <div key={key} className="bg-card border rounded-lg p-3 flex items-center gap-3">
             <div className={`w-8 h-8 rounded flex items-center justify-center ${STATS_COLORS[key].bg} ${STATS_COLORS[key].text}`}>
@@ -360,11 +371,11 @@ const DevicesPage = () => {
       {/* Drawer (détail) */}
       {drawerDevice && (
         <div className="fixed inset-0 z-50">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setDrawerDevice(null)} />
-          <div className="absolute right-0 top-0 h-full w-80 bg-card border-l shadow-xl p-4 overflow-y-auto">
+          <div className="absolute inset-0 bg-black/40" onClick={closeDrawer} />
+          <div className="absolute right-0 top-0 h-full w-full max-w-sm bg-card border-l shadow-xl p-4 overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold">{drawerDevice.name}</h3>
-              <Button variant="ghost" size="icon" onClick={() => setDrawerDevice(null)}>✕</Button>
+              <Button variant="ghost" size="icon" onClick={closeDrawer}>✕</Button>
             </div>
             <div className="space-y-3 text-sm">
               <div><span className="text-muted-foreground">Type</span> <span className="float-right">{TYPE_LABELS[drawerDevice.type]}</span></div>
@@ -373,6 +384,9 @@ const DevicesPage = () => {
               <div><span className="text-muted-foreground">Protocole</span> <span className="float-right">{drawerDevice.protocol}</span></div>
               <div><span className="text-muted-foreground">État déclaré par le boîtier</span> <span className="float-right font-bold">{getReportedDeviceState(drawerDevice) === 'on' ? "Allumé" : getReportedDeviceState(drawerDevice) === 'off' ? "Éteint" : "État inconnu"}</span></div>
               <div><span className="text-muted-foreground">ID</span> <span className="float-right text-xs font-mono">{drawerDevice.id}</span></div>
+              {latestCommands[drawerDevice.id] && <DeviceCommandProgress key={latestCommands[drawerDevice.id].commandId}
+                deviceId={drawerDevice.id} command={latestCommands[drawerDevice.id]} />}
+              {drawerDevice.buildingId && <DeviceEnergyDetails key={drawerDevice.id} buildingId={drawerDevice.buildingId} deviceId={drawerDevice.id} />}
             </div>
           </div>
         </div>
@@ -392,4 +406,13 @@ const DevicesPage = () => {
   );
 };
 
-export default DevicesPage;
+function DevicesRoute() {
+  const query = useSearchParams();
+  const tenant = useStore(state => state.impersonatedTenantId ?? state.user?.tenantId);
+  const deviceId = (query.get("deviceId") ?? "").slice(0, 100);
+  return <DevicesPage key={`${tenant ?? ""}:${deviceId}`} deviceId={deviceId} />;
+}
+
+export default function DevicesPageWithSearch() {
+  return <Suspense fallback={<p role="status">Chargement des appareils…</p>}><DevicesRoute /></Suspense>;
+}

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -137,9 +138,10 @@ const BuildingDetailPage = () => {
             <p className="text-muted-foreground">{building.address}, {building.city}</p>
           </div>
         </div>
-        <Badge variant={building.isActive ? "default" : "secondary"}>
-          {building.isActive ? "Actif" : "Inactif"}
-        </Badge>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Badge variant={building.isActive ? "default" : "secondary"}>{building.isActive ? "Actif" : "Inactif"}</Badge>
+          {building.isActive && <Button asChild variant="outline" size="sm"><Link href={`/energy?buildingId=${encodeURIComponent(buildingId)}`}>Voir l’énergie</Link></Button>}
+        </div>
       </div>
 
       {/* KPIs */}

@@ -195,6 +195,34 @@ Avec une demande mesurée de **1 350 W**, un plafond de **1 000 W** et une charg
 
 La migration `20261126000000_add_automation_simulations` ajoute l’indicateur `simulationOnly` et l’historique des exécutions. Utiliser `AFRIXORA_TEST_TIMESCALE=true npm test` sur une base isolée pour inclure la recette HTTP avec mesures V2.
 
+## Interface de gestion énergétique
+
+Ouvrir **Énergie** depuis le menu existant ou **Voir l’énergie** depuis la fiche d’un bâtiment. Le sélecteur de bâtiment et les boutons de période pilotent les vues. Les vues V2 utilisent les droits de topologie du bâtiment. Le serveur continue de contrôler les accès aux données.
+
+| Vue | Données affichées |
+|---|---|
+| Vue d’ensemble | Choix du point d’import du tableau général et du point de puissance. Énergie mesurée et estimée séparées, dernière puissance en kW et sa date, coût historique estimé, lacunes et alertes non lues. |
+| Sources | Type, disponibilité déclarée et dernière position horodatée par arrivée. La source courante est inconnue tant que l’API ne fournit pas de confirmation du transfert. |
+| Distribution | Tableaux, circuits, charges, priorités, compteurs et contrôleurs. Les liens ouvrent le détail de l’appareil dans le registre existant. |
+| Simulations | Règles et ordre des charges, hypothèses du scénario, exécution et historique. Accessible aux rôles administrateurs selon les droits du site. Les règles se configurent via l’API de phase 5. |
+| Finances | Énergie attribuée par source et estimation historique en USD au tarif global. La dépense par source, la version et la date d’effet du tarif et le taux USD/CDF restent indisponibles dans les API actuelles. |
+| Alertes et maintenance | Alertes du bâtiment, dates, état de lecture et sources signalées en maintenance. Un journal d’interventions et les heures de fonctionnement exigent des données supplémentaires. |
+| Analyses historiques | Courbes, répartition par zone et indicateurs historiques. L’export CSV conserve ses droits d’abonnement. |
+
+La fiche **Appareils** affiche les charges reliées directement par un point de mesure ou un canal de commande. L’état déclaré, le suivi de la demande et de l’envoi, et la vérification physique horodatée sont présentés séparément. Le suivi de commande s’affiche quand l’API a rendu un identifiant de commande pendant la session.
+
+### Recette navigateur
+
+Avec Node 22 et Chrome installés, lancer depuis `frontend` :
+
+```bash
+npm run typecheck
+NEXT_PUBLIC_API_URL=/ NEXT_PUBLIC_AFRIXORA_DEVICE_CONTROL_ENABLED=false npm run build
+node tests/energy-v2.browser.cjs
+```
+
+Le test démarre Next.js sur la boucle locale et fournit une API fictive aux requêtes Chrome. Il couvre les mesures, la navigation mobile et bureau, les permissions, la simulation et l’ouverture de la fiche d’un appareil. Le test n’utilise ni base de production ni équipement. `AFRIXORA_CHROME_BIN` permet de préciser le binaire Chrome ou Chromium.
+
 ## Tests backend
 
 Les tests unitaires RBAC et les tests d’intégration HTTP s’exécutent avec `npm test` depuis `backend`. Les tests HTTP utilisent une base PostgreSQL de test dédiée, déjà créée. Prisma y applique les migrations avant l’exécution. Le seed, TimescaleDB, Redis et MQTT ne sont pas requis.

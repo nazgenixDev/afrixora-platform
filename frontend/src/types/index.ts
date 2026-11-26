@@ -31,6 +31,7 @@ export interface Building {
   name: string;
   address?: string;
   city?: string;
+  timeZone?: string | null;
   unitsCount?: number;
   isActive?: boolean;
   createdAt?: string;
