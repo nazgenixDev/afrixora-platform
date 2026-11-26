@@ -32,16 +32,17 @@ export const telemetrySchema = z.discriminatedUnion('metric', [
 
 export type Telemetry = z.infer<typeof telemetrySchema>;
 export type TelemetryScope = { tenantId: string; buildingId: string; deviceId: string };
+export const telemetryWindow = { pastMs: dayMs, futureMs: 5 * 60_000 };
 
 export function parseTelemetry(input: unknown, scope: TelemetryScope, receivedAt: number): Telemetry | undefined {
   const parsed = telemetrySchema.safeParse(input);
   if (!parsed.success || parsed.data.deviceId !== scope.deviceId) return;
   const capturedAt = Date.parse(parsed.data.capturedAt);
-  if (!Number.isFinite(capturedAt) || capturedAt < receivedAt - dayMs || capturedAt > receivedAt + 5 * 60_000) return;
+  if (!Number.isFinite(capturedAt) || capturedAt < receivedAt - telemetryWindow.pastMs || capturedAt > receivedAt + telemetryWindow.futureMs) return;
   return parsed.data;
 }
 
-export async function persistTelemetry(scope: TelemetryScope, sample: Telemetry, receivedAt: number) {
+export async function persistTelemetry(scope: TelemetryScope, sample: Telemetry, receivedAt: number, verifyReplay = false) {
   const { tenantId, buildingId, deviceId } = scope;
   const { meteringPointId, metric, bootId, sequence, unit, value, measurementMode, quality, origin } = sample;
   const feedId = sample.sourceFeedId ?? null;
@@ -51,14 +52,25 @@ export async function persistTelemetry(scope: TelemetryScope, sample: Telemetry,
   return prisma.$transaction(async tx => {
     // La transaction sérialise la même identité, même si le message rejoué a changé d’horodatage.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${identity}, 0))`;
-    const existing = await tx.$queryRaw<{ exists: boolean }[]>`
-      SELECT EXISTS (
-        SELECT 1 FROM public.sensor_readings
-        WHERE tenant_id = ${tenantId}::uuid AND device_id = ${deviceId}::uuid
-          AND metering_point_id = ${meteringPointId}::uuid AND metric = ${metric}
-          AND boot_id = ${bootId}::uuid AND sequence = ${sequence}
-      ) AS exists`;
-    if (existing[0]?.exists) return 'duplicate' as const;
+    const [existing] = await tx.$queryRaw<{ exists: boolean; matches: boolean }[]>`
+      SELECT count(*) > 0 AS exists, coalesce(bool_and((
+        r.time = ${time} AND r.value = ${value}::double precision AND r.unit = ${unit}
+        AND r.measurement_mode = ${measurementMode} AND r.quality = ${quality} AND r.origin = ${origin}
+        AND r.source_feed_id IS NOT DISTINCT FROM ${feedId}::uuid
+      ) IS TRUE), false) AS matches
+      FROM public.sensor_readings r
+      WHERE r.tenant_id = ${tenantId}::uuid AND r.device_id = ${deviceId}::uuid
+        AND r.metering_point_id = ${meteringPointId}::uuid AND r.metric = ${metric}
+        AND r.boot_id = ${bootId}::uuid AND r.sequence = ${sequence}
+        AND EXISTS (
+          SELECT 1 FROM "Device" d
+          JOIN "Building" b ON b.id = d."buildingId" AND b."tenantId" = d."tenantId" AND b."isActive"
+          JOIN "Tenant" t ON t.id = d."tenantId" AND t."isActive"
+          JOIN "MeteringPoint" p ON p."deviceId" = d.id AND p."tenantId" = t.id
+            AND p."buildingId" = b.id AND p.id = ${meteringPointId}
+          WHERE d.id = ${deviceId} AND d."buildingId" = ${buildingId} AND d."tenantId" = ${tenantId}
+        )`;
+    if (existing?.exists) return verifyReplay && !existing.matches ? 'conflict' as const : 'duplicate' as const;
 
     const inserted = await tx.$executeRaw`
       INSERT INTO public.sensor_readings (

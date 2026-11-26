@@ -111,6 +111,77 @@ Publier un échantillon par message sur `afrixora/{tenantId}/{buildingId}/device
 - Incrémenter `sequence` par compteur, point et métrique. Générer un nouvel UUID `bootId` au redémarrage. En cas de retransmission, réutiliser l’identité d’origine. PostgreSQL sérialise les écritures concurrentes d’une même identité et conserve le premier relevé persisté tant qu’il est retenu.
 - En cas d’échec SQL, le worker tente une mise en attente Redis puis un rejeu avec délai croissant pendant au plus 24 heures. Le tampon du tenant est limité à 1 000 entrées. Un PUBACK MQTT ne garantit pas la persistance en base. Une indisponibilité de Redis, une éviction ou une expiration peut entraîner une perte. L’ACL reste la première barrière pendant la panne, et le serveur revérifie le périmètre lors de la persistance.
 
+### Rejeu hors connexion et accusés applicatifs (7D)
+
+#### Échange MQTT
+
+Le protocole ajoute une enveloppe `telemetry_batch` au topic V2 existant
+`afrixora/{tenantId}/{buildingId}/devices/{deviceId}/readings`.
+Le worker répond sur `afrixora/{tenantId}/{buildingId}/devices/{deviceId}/telemetry-ack`.
+Les deux messages utilisent MQTT 5, QoS 1 et `retain: false`. Le serveur donne à l’ACK une durée de vie de 10 secondes à partir de sa publication. S’abonner à l’ACK avant d’envoyer un lot.
+
+Un lot contient au plus 32 entrées et sa charge utile MQTT est limitée à 64 Kio. Attribuer un UUID `batchId` par composition de lot et un UUID `itemId` stable par entrée du journal. Les `itemId` sont uniques dans un lot. Chaque `sample` reprend le contrat V2 ci-dessus.
+
+```json
+{
+  "type": "telemetry_batch",
+  "schemaVersion": 2,
+  "batchId": "00000000-0000-4000-8000-000000000020",
+  "items": [{
+    "itemId": "00000000-0000-4000-8000-000000000021",
+    "sample": {
+      "schemaVersion": 2,
+      "deviceId": "00000000-0000-4000-8000-000000000007",
+      "meteringPointId": "00000000-0000-4000-8000-000000000009",
+      "capturedAt": "2026-11-26T12:00:00+02:00",
+      "metric": "energy",
+      "value": 12500,
+      "unit": "Wh",
+      "measurementMode": "CUMULATIVE",
+      "bootId": "00000000-0000-4000-8000-000000000010",
+      "sequence": 42,
+      "quality": "MEASURED",
+      "origin": "DEVICE"
+    }
+  }]
+}
+```
+
+La réponse `telemetry_ack` (version 2) reprend `batchId` et contient `serverReceivedAt`, `serverSentAt` et `results`. Chaque résultat contient `itemId` et `status`, avec `reason` pour un rejet. Le serveur traite les mesures indépendamment. En cas d’erreur SQL, les mesures valides restantes sont marquées `RETRY`.
+
+```json
+{
+  "type": "telemetry_ack",
+  "schemaVersion": 2,
+  "batchId": "00000000-0000-4000-8000-000000000020",
+  "serverReceivedAt": "2026-11-26T10:01:00.000Z",
+  "serverSentAt": "2026-11-26T10:01:00.120Z",
+  "results": [{"itemId": "00000000-0000-4000-8000-000000000021", "status": "STORED"}]
+}
+```
+
+| Statut | Traitement par le boîtier |
+|---|---|
+| `STORED` | Enregistrer localement la confirmation avant de libérer l’espace de la mesure. La transaction TimescaleDB a abouti. |
+| `DUPLICATE` | Appliquer le même traitement. L’identité et le contenu concordent avec la mesure déjà persistée. |
+| `RETRY` ou ACK absent | Conserver la mesure intacte et la renvoyer après temporisation. |
+| `REJECTED` | Conserver la mesure et le motif dans le journal des rejets. Les motifs sont `INVALID_SAMPLE`, `CLOCK_AHEAD`, `REPLAY_EXPIRED`, `INCOMPATIBLE_POINT` et `IDENTITY_CONFLICT`. Un rejet n’autorise pas la suppression comme donnée livrée. |
+
+Valider le topic, la version, le lot en cours et chaque `itemId` avant d’appliquer un résultat. Un PUBACK MQTT atteste l’échange avec le broker. Seuls `STORED` et `DUPLICATE` reçus sur le topic autorisé attestent la persistance. Un lot invalide, retenu, hors périmètre ou reçu pendant saturation peut rester sans réponse. Le serveur accepte jusqu’à quatre lots simultanés, à raison d’un par appareil.
+
+#### Journal local et reprise à implémenter dans le firmware
+
+1. Écrire la mesure et son identité dans un journal durable **avant** la première publication. Conserver `bootId`, `sequence`, `capturedAt`, `itemId` et le contenu lors des rejeux. Après redémarrage, relire les mesures en attente avec leur ancien `bootId` et réserver le nouveau `bootId` aux nouvelles acquisitions.
+2. Après reconnexion, s’abonner au topic d’ACK et reprendre par les mesures non confirmées les plus anciennes. Garder un seul lot en vol par appareil. Attendre par exemple 15 secondes, puis réessayer avec temporisation exponentielle et une part aléatoire, plafonnée à deux minutes. Après un ACK partiel, rejouer les entrées non confirmées avec un nouveau `batchId` si la composition du lot change.
+3. Dater les acquisitions avec la RTC synchronisée sur une référence UTC de confiance. Un lot vide peut vérifier l’échange et fournir les deux temps serveur. Utiliser le temps aller-retour mesuré sur une horloge monotone pour apprécier l’incertitude. La fenêtre d’admission couvre les **24 heures passées** et tolère **5 minutes d’avance**. Conserver l’horodatage d’acquisition lors de la reprise. Si l’acquisition ne peut pas être datée de façon fiable ou si la fenêtre est dépassée, isoler les données pour examen.
+4. Dimensionner le journal selon le nombre de mesures par unité de temps et la coupure qu’il doit couvrir. Signaler un journal plein, un dépassement de fenêtre, une RTC invalide et les rejets. Les essais physiques doivent inclure une coupure d’alimentation pendant l’écriture et pendant la confirmation locale.
+
+Le worker utilise les ACL du broker. Accorder l’écriture du topic d’ACK au seul compte worker et la lecture aux passerelles autorisées sur les appareils correspondants. Les ACL historiques restent valides pour les anciens clients. Préparer les deux autorisations sur des copies avant tout essai de rejeu. Installer le firmware ou modifier les ACL réelles nécessite une intervention distincte. Un lot de rejeu traite la télémétrie indépendamment de l’état en ligne, des automatismes et des commandes électriques.
+
+#### Notifications
+
+Les alertes restent consultables dans l’application. Les canaux SMS et WhatsApp restent à intégrer après identification et configuration d’un fournisseur et des destinataires autorisés. Le serveur n’émet aucun résultat d’envoi pour ces canaux. Aucun changement de schéma ni migration dédiée n’est nécessaire pour le rejeu.
+
 ### Lire et interpréter les résultats
 
 `GET /api/v1/energy/metered?buildingId=…&meteringPointId=…&from=…&to=…` utilise une session JWT et les droits de topologie du bâtiment. La période maximale est de 93 jours et la lecture accepte jusqu’à 50 000 échantillons. Configurer `timeZone` via l’API Bâtiments avec un fuseau IANA et un droit d’écriture sur la topologie du site. Pour une ville reconnue, le fuseau local sert de défaut. L’API V2 demande une configuration explicite si le site est inconnu.

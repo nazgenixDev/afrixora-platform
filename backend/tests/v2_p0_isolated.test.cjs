@@ -189,6 +189,9 @@ test('Les règles existantes turn_on et turn_off suivent le même chemin journal
 });
 
 function loadMqttWorker(mqtt, prisma = {}, env = {}) {
+  const energyTelemetry = load('services/energyTelemetry.ts', {
+    zod, '../utils/database': { prisma },
+  });
   return load('services/mqttWorker.ts', {
     'node:crypto': { randomUUID: () => commandId },
     zod,
@@ -197,8 +200,9 @@ function loadMqttWorker(mqtt, prisma = {}, env = {}) {
     '../utils/database': { prisma },
     '../utils/redis': { getRedisClient: () => ({}), isRedisConnected: () => false },
     './automationEngine': { evaluate: async () => {} },
-    './energyTelemetry': load('services/energyTelemetry.ts', {
-      zod, '../utils/database': { prisma },
+    './energyTelemetry': energyTelemetry,
+    './telemetryReplay': load('services/telemetryReplay.ts', {
+      zod, '../utils/logger': logger, './energyTelemetry': energyTelemetry,
     }),
   }, env);
 }

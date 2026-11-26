@@ -4,13 +4,17 @@ import { summarizeMeteredEnergy, type MeteredRow } from '../src/services/metered
 import { buildingTimeZone, validTimeZone } from '../src/utils/buildingTimeZone';
 import { connectMQTT } from '../src/services/mqttWorker';
 
-const { handlers, transaction, redis, prisma } = vi.hoisted(() => ({
+const { handlers, transaction, redis, prisma, transport } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   transaction: vi.fn(),
   redis: { eval: vi.fn(), set: vi.fn(), scan: vi.fn(), lrange: vi.fn() },
-  prisma: { device: { updateMany: vi.fn() } },
+  prisma: { device: { updateMany: vi.fn(), findFirst: vi.fn() } },
+  transport: { publish: vi.fn(), removeOutgoingMessage: vi.fn(), getLastMessageId: vi.fn(() => 1) },
 }));
 vi.mock('mqtt', () => ({ default: { connect: () => ({
+  connected: true, ...transport,
+  subscribe: (topics: string[], _options: unknown, reply: (error: null, grants: { qos: number }[]) => void) =>
+    reply(null, topics.map(() => ({ qos: 1 }))),
   on: (name: string, handler: (...args: never[]) => unknown) => handlers.set(name, handler),
 }) } }));
 vi.mock('../src/utils/database', () => ({ prisma: { ...prisma, $transaction: transaction } }));
@@ -76,6 +80,77 @@ describe('Contrat de télémétrie V2', () => {
     expect(read).toHaveBeenCalledTimes(1);
     expect(redis.eval.mock.calls.some(([script]) => String(script).includes('LREM'))).toBe(true);
   });
+  it('reprend après perte de l’ACK et distingue résultats partiels, conflits et horloge incorrecte', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const base = `afrixora/${scope.tenantId}/${scope.buildingId}/devices/${scope.deviceId}`;
+    const id = (position: number) => `00000000-0000-4000-8000-${String(position).padStart(12, '0')}`;
+    const item = (position: number, overrides: Partial<typeof sample> | { capturedAt: string } = {}) =>
+      ({ itemId: id(position), sample: { ...sample, sequence: position, ...overrides } });
+    const batch = (items: unknown[]) => Buffer.from(JSON.stringify({ type: 'telemetry_batch', schemaVersion: 2, batchId: id(99), items }));
+    connectMQTT({} as Parameters<typeof connectMQTT>[0]);
+    const onConnect = handlers.get('connect') as () => void;
+    const message = handlers.get('message') as (topic: string, payload: Buffer, packet?: { retain: boolean }) => Promise<void>;
+    const onClose = handlers.get('close') as () => void;
+    onConnect();
+    // Le paquet MQTT sortant est mis en attente, puis la connexion tombe avant son PUBACK.
+    transport.publish.mockImplementationOnce((_topic, _payload, options) => { options.cbStorePut(); onClose(); });
+    transport.publish.mockImplementationOnce((_topic, _payload, options, done) => { options.cbStorePut(); done(); });
+    prisma.device.findFirst.mockResolvedValue({ id: scope.deviceId });
+    const execute = vi.fn().mockResolvedValue(1);
+    const lookup = vi.fn().mockResolvedValueOnce([{ exists: false }]);
+    transaction.mockImplementationOnce(work => work({ $executeRaw: execute, $queryRaw: lookup }));
+    await message(base + '/readings', batch([item(10)]), { retain: true });
+    expect(transaction).not.toHaveBeenCalled();
+    await message(base + '/readings', batch([item(10)]));
+    expect(transport.removeOutgoingMessage).toHaveBeenCalledWith(1);
+
+    onConnect();
+    const replay = (exists: boolean, matches: boolean) => (work: (db: unknown) => Promise<unknown>) =>
+      work({ $executeRaw: execute, $queryRaw: async () => [{ exists, matches }] });
+    transaction.mockImplementationOnce(replay(true, true)).mockImplementationOnce(replay(true, false))
+      .mockImplementationOnce(replay(false, false)).mockRejectedValueOnce(new Error('Base indisponible'));
+    await message(base + '/readings', batch([
+      item(10), item(11), item(12), item(13), item(14),
+      item(15, { capturedAt: new Date(now + 360_000).toISOString() }),
+      item(16, { capturedAt: new Date(now - 90_000_000).toISOString() }),
+      { itemId: id(17), sample: { ...sample, deviceId: id(42) } },
+    ]));
+    expect(transport.publish).toHaveBeenCalledTimes(2);
+    const [topic, payload, options] = transport.publish.mock.calls[1];
+    expect(topic).toBe(base + '/telemetry-ack');
+    expect(options).toMatchObject({ qos: 1, retain: false, properties: { messageExpiryInterval: 10 } });
+    expect(JSON.parse(payload)).toMatchObject({
+      batchId: id(99), serverReceivedAt: new Date(now).toISOString(), results: [
+        { itemId: id(10), status: 'DUPLICATE' }, { itemId: id(11), status: 'REJECTED', reason: 'IDENTITY_CONFLICT' },
+        { itemId: id(12), status: 'STORED' }, { itemId: id(13), status: 'RETRY' }, { itemId: id(14), status: 'RETRY' },
+        { itemId: id(15), status: 'REJECTED', reason: 'CLOCK_AHEAD' },
+        { itemId: id(16), status: 'REJECTED', reason: 'REPLAY_EXPIRED' },
+        { itemId: id(17), status: 'REJECTED', reason: 'INVALID_SAMPLE' },
+      ],
+    });
+    expect(transaction).toHaveBeenCalledTimes(5);
+    expect(redis.eval).not.toHaveBeenCalled();
+  });
+
+  it('ne répond ni à un lot ambigu ni à un équipement hors périmètre', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    connectMQTT({} as Parameters<typeof connectMQTT>[0]);
+    (handlers.get('connect') as () => void)();
+    prisma.device.findFirst.mockResolvedValue(null);
+    const message = handlers.get('message') as (topic: string, payload: Buffer) => Promise<void>;
+    const item = { itemId: sample.bootId, sample };
+    const topic = `afrixora/${scope.tenantId}/${scope.buildingId}/devices/00000000-0000-4000-8000-000000000042/readings`;
+    const batch = (items: unknown[]) => Buffer.from(JSON.stringify({ type: 'telemetry_batch', schemaVersion: 2, batchId: sample.bootId, items }));
+    await message(topic, batch([item, item]));
+    expect(prisma.device.findFirst).not.toHaveBeenCalled();
+    await message(topic, batch([]));
+    expect(prisma.device.findFirst).toHaveBeenCalledOnce();
+    expect(transport.publish).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
 });
 
 function row(sequence: number, value: number, fields: Partial<MeteredRow> = {}): MeteredRow {

@@ -717,6 +717,10 @@ describe.runIf(process.env.AFRIXORA_TEST_TIMESCALE === 'true')('Mesures V2 sur T
       expect(await Promise.all([persistTelemetry(scope, first, receivedAt), persistTelemetry(scope, first, receivedAt)]))
         .toEqual(expect.arrayContaining(['stored', 'duplicate']));
       expect(await persistTelemetry(scope, { ...first, capturedAt: new Date(receivedAt).toISOString() }, receivedAt)).toBe('duplicate');
+      expect(await persistTelemetry(scope, first, receivedAt, true)).toBe('duplicate');
+      expect(await persistTelemetry(scope, { ...first, value: first.value + 1 }, receivedAt, true)).toBe('conflict');
+      expect(await persistTelemetry(scope, { ...first, capturedAt: new Date(receivedAt).toISOString() }, receivedAt, true)).toBe('conflict');
+      expect(await persistTelemetry({ ...scope, buildingId: foreign.buildingId }, first, receivedAt, true)).toBe('rejected');
       expect(await persistTelemetry(scope, reading(main.id, 1, 60, topology.feed.id), receivedAt)).toBe('stored');
       expect(await persistTelemetry(scope, reading(main.id, 2, 100, feed.id), receivedAt)).toBe('stored');
       expect(await persistTelemetry(scope, reading(main.id, 3, 200, elsewhere.feed.id), receivedAt)).toBe('rejected');

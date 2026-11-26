@@ -8,6 +8,7 @@ import { prisma, query } from '../utils/database';
 import { getRedisClient, isRedisConnected } from '../utils/redis';
 import automationEngine from './automationEngine';
 import { parseTelemetry, persistTelemetry, telemetrySchema, type Telemetry } from './energyTelemetry';
+import { handleTelemetryReplay } from './telemetryReplay';
 
 let mqttClient: mqtt.MqttClient | null = null;
 let subscriptionsReady = false;
@@ -153,7 +154,7 @@ export function isMqttReady(): boolean {
   return mqttClient?.connected === true && subscriptionsReady;
 }
 
-// Les commandes ne survivent pas à une coupure du transport.
+// Les publications éphémères ne survivent pas à une coupure du transport.
 export function publishMqtt(topic: string, payload: unknown, expiresAt: Date): Promise<void> {
   const client = mqttClient;
   const remainingMs = expiresAt.getTime() - Date.now();
@@ -161,7 +162,7 @@ export function publishMqtt(topic: string, payload: unknown, expiresAt: Date): P
     return Promise.reject(new Error('Délai de publication MQTT dépassé'));
   }
   if (!client?.connected || !subscriptionsReady || pendingPublications.size >= MAX_PENDING_PUBLICATIONS) {
-    return Promise.reject(new Error('Transport de commandes MQTT indisponible'));
+    return Promise.reject(new Error('Transport MQTT indisponible'));
   }
 
   return new Promise((resolve, reject) => {
@@ -463,6 +464,10 @@ export const connectMQTT = (io: Server): void => {
       }
 
       if (isDeviceMessage) {
+        if (kind === 'readings' && payloadData.type === 'telemetry_batch') {
+          if (!packet?.retain && isMqttReady()) await handleTelemetryReplay(scope, payloadData, receivedAt, belongsToScope, publishMqtt);
+          return;
+        }
         if (kind === 'readings' && payloadData.schemaVersion !== undefined && payloadData.schemaVersion !== 1) {
           if (!packet?.retain) await handleVersionedReading(scope, payloadData, receivedAt);
           return;
