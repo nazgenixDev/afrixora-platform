@@ -33,6 +33,7 @@ awk -v worker="$worker" '
     required["read afrixora/+/+/devices/+/events"] = 1
     required["read afrixora/+/+/gateways/+/status"] = 1
     required["write afrixora/+/+/devices/+/commands"] = 1
+    replay_rule = "write afrixora/+/+/devices/+/telemetry-ack"
   }
 
   FNR == NR {
@@ -56,7 +57,7 @@ awk -v worker="$worker" '
   $1 == "topic" && NF == 3 && user != "" {
     rule = $2 " " $3
     if (user == worker) {
-      if (!(rule in required) || ++worker_rules[rule] != 1) invalid("règle worker invalide ou dupliquée")
+      if ((!(rule in required) && rule != replay_rule) || ++worker_rules[rule] != 1) invalid("règle worker invalide ou dupliquée")
       next
     }
     if (split($3, topic, "/") != 6 || topic[1] != "afrixora" ||
@@ -70,6 +71,8 @@ awk -v worker="$worker" '
     scopes[user] = scope
     if (topic[4] == "gateways" && topic[6] == "status" && user == "gateway-" topic[5] && $2 == "write") {
       statuses[user] = 1
+    } else if (topic[4] == "devices" && topic[6] == "telemetry-ack" && $2 == "read") {
+      replay_devices[user, $3] = "write afrixora/" scope "/devices/" topic[5] "/readings"
     } else if (!(topic[4] == "devices" && (($2 == "write" && topic[6] ~ /^(readings|events)$/) ||
                                           ($2 == "read" && topic[6] == "commands")))) {
       invalid("direction ou type de topic interdit pour la passerelle")
@@ -81,6 +84,11 @@ awk -v worker="$worker" '
 
   END {
     for (rule in required) if (!(rule in worker_rules)) invalid("règle worker manquante")
+    for (key in replay_devices) {
+      split(key, parts, SUBSEP)
+      if (!(replay_rule in worker_rules) || !((parts[1], replay_devices[key]) in gateway_rules))
+        invalid("accusé de télémétrie sans autorisation de publication correspondante")
+    }
     for (name in accounts) {
       if (!(name in blocks) || (name != worker && !(name in statuses))) invalid("compte incomplet")
     }

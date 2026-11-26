@@ -51,6 +51,7 @@ prefix="afrixora/$tenant_id/$building_id"
     printf 'topic write %s/devices/%s/readings\n' "$prefix" "$device_id"
     printf 'topic write %s/devices/%s/events\n' "$prefix" "$device_id"
     printf 'topic read %s/devices/%s/commands\n' "$prefix" "$device_id"
+    printf 'topic read %s/devices/%s/telemetry-ack\n' "$prefix" "$device_id"
   done
 } >> "$tmp/acl"
 

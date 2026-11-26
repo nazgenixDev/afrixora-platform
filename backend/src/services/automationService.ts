@@ -26,7 +26,7 @@ async function verifyDevices(
 
 export default {
   async findAll(tenantId: string): Promise<Automation[]> {
-    return prisma.automation.findMany({ where: { tenantId, building: { tenantId } } });
+    return prisma.automation.findMany({ where: { tenantId, simulationOnly: false, building: { tenantId } } });
   },
   async create(data: CreateAutomationInput, tenantId: string): Promise<Automation> {
     const { buildingId, name, trigger, conditions, action } = data;
@@ -42,7 +42,7 @@ export default {
     });
   },
   async update(id: string, data: UpdateAutomationInput, tenantId: string): Promise<Automation> {
-    const where = { id, tenantId, building: { tenantId, isActive: true } };
+    const where = { id, tenantId, simulationOnly: false, building: { tenantId, isActive: true } };
     const automation = await prisma.automation.findFirst({ where, select: { buildingId: true } });
     if (!automation) throw new NotFoundError('Automatisation introuvable');
 
@@ -58,7 +58,7 @@ export default {
     }
   },
   async remove(id: string, tenantId: string): Promise<void> {
-    const where = { id, tenantId, building: { tenantId } };
+    const where = { id, tenantId, simulationOnly: false, building: { tenantId } };
     const automation = await prisma.automation.findFirst({ where, select: { id: true } });
     if (!automation) throw new NotFoundError('Automatisation introuvable');
 

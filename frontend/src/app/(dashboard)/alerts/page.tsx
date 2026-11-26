@@ -185,6 +185,8 @@ const TenantAlerts = ({ tenantId }: { tenantId: string }) => {
         return "Appareil hors ligne";
       case "AUTOMATION":
         return "Automatisation déclenchée";
+      case "FUEL_DISCREPANCY":
+        return "Écart de carburant à vérifier";
       case "SYSTEM":
         return "Système";
       default:
@@ -443,6 +445,7 @@ const TenantAlerts = ({ tenantId }: { tenantId: string }) => {
                     <CardTitle className="text-base">
                       {getAlertTypeLabel(alert.type)}
                     </CardTitle>
+                    {alert.type === "FUEL_DISCREPANCY" && alert.resolvedAt && <Badge variant="outline">Écart expliqué</Badge>}
                   </div>
                   <div className="text-sm text-muted-foreground">
                     {formatDate(alert.createdAt)}

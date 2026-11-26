@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -185,14 +186,15 @@ const AutomationsPage = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Automatisations</h1>
           <p className="text-muted-foreground">Moteur de règles SI / ET / ALORS</p>
         </div>
-        <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => { resetForm(); setShowNewRule(true); }}>
-          + Nouvelle règle
-        </Button>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button asChild variant="outline"><Link href="/energy?view=simulation">Simulations énergétiques</Link></Button>
+          <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => { resetForm(); setShowNewRule(true); }}>+ Nouvelle règle</Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

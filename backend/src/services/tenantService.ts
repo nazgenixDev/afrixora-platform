@@ -62,10 +62,21 @@ export async function deleteTenantPermanently(id: string): Promise<void> {
       throw new AppError('Ce tenant héberge un compte super administrateur.', 409, 'PROTECTED_TENANT');
     }
 
+    await tx.fuelTank.deleteMany({ where });
     await tx.alert.deleteMany({ where });
     await tx.automation.deleteMany({ where });
     await tx.gateway.deleteMany({ where });
+    // Supprimer les liens de mesure et de commande avant leurs cibles et les appareils.
+    await tx.controlEndpoint.deleteMany({ where });
+    await tx.meteringPoint.deleteMany({ where });
+    await tx.electricalLoad.deleteMany({ where });
+    await tx.circuit.deleteMany({ where });
+    await tx.distributionBoard.deleteMany({ where });
+    await tx.sourceFeed.deleteMany({ where });
+    await tx.energyBus.deleteMany({ where });
+    await tx.energySource.deleteMany({ where });
     await tx.deviceState.deleteMany({ where });
+    await tx.deviceCommand.deleteMany({ where });
     await tx.device.deleteMany({ where });
     await tx.zone.deleteMany({ where });
     await tx.building.deleteMany({ where });

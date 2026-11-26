@@ -22,8 +22,29 @@ CREATE TABLE IF NOT EXISTS public.sensor_readings (
   unit       TEXT
 );
 
+-- Métadonnées V2 additives. Les lignes et l’agrégat historiques restent compatibles.
+ALTER TABLE public.sensor_readings
+  ADD COLUMN IF NOT EXISTS metering_point_id UUID,
+  ADD COLUMN IF NOT EXISTS boot_id UUID,
+  ADD COLUMN IF NOT EXISTS sequence INTEGER,
+  ADD COLUMN IF NOT EXISTS measurement_mode TEXT,
+  ADD COLUMN IF NOT EXISTS quality TEXT,
+  ADD COLUMN IF NOT EXISTS origin TEXT,
+  ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS source_feed_id UUID,
+  ADD COLUMN IF NOT EXISTS source_id UUID,
+  ADD COLUMN IF NOT EXISTS source_type TEXT;
+
 SELECT create_hypertable('public.sensor_readings', 'time',
                          if_not_exists => TRUE, migrate_data => TRUE);
+
+CREATE INDEX IF NOT EXISTS sensor_readings_v2_identity_idx
+  ON public.sensor_readings (tenant_id, device_id, metering_point_id, metric, boot_id, sequence)
+  WHERE boot_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS sensor_readings_v2_point_time_idx
+  ON public.sensor_readings (tenant_id, metering_point_id, time DESC)
+  WHERE metering_point_id IS NOT NULL;
+
 
 CREATE INDEX IF NOT EXISTS sensor_readings_device_id_time_idx
   ON public.sensor_readings (device_id, time DESC);

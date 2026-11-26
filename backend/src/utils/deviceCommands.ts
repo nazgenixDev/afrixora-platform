@@ -7,14 +7,14 @@ export const commandFields = {
   params: z.strictObject({ state: z.enum(['on', 'off']).optional() }).optional(),
 };
 
-export function hasValidCommandParams({ command, params }: DeviceCommand) {
+export function hasValidCommandParams({ command, params }: DeviceCommandInput) {
   return command === 'set_state' ? params?.state !== undefined : params?.state === undefined;
 }
 
 export const deviceCommandSchema = z.strictObject(commandFields)
   .refine(hasValidCommandParams, { path: ['params'], message: 'Paramètres de commande invalides.' });
 
-export type DeviceCommand = {
+export type DeviceCommandInput = {
   command: z.infer<typeof commandFields.command>;
   params?: z.infer<typeof commandFields.params>;
 };

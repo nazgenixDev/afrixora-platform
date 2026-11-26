@@ -1,7 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { EnergyManagement } from "@/components/energy/EnergyManagement";
+import { siteTimeZone } from "@/lib/energyV2";
 import { isAxiosError } from "axios";
 import { Download } from "lucide-react";
 import {
@@ -41,7 +44,7 @@ const tooltipStyle = {
 
 interface EnergyData {
   summary: EnergySummary;
-  consumption: { time: string; kwh: number }[];
+  consumption: { time: string; kwh: number; hasPower: boolean }[];
   zones: { id: string | null; name: string; value: number; color: string }[];
 }
 
@@ -117,7 +120,7 @@ function EnergyExport({ access, buildingId, period }: { access: ExportAccess; bu
   );
 }
 
-function EnergyMeasurements({ buildingId, period }: { buildingId: string; period: Period }) {
+function EnergyMeasurements({ buildingId, period, timeZone }: { buildingId: string; period: Period; timeZone: string }) {
   const [data, setData] = useState<EnergyData | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -137,7 +140,7 @@ function EnergyMeasurements({ buildingId, period }: { buildingId: string; period
         if (signal.aborted) return;
 
         const dateFormat = new Intl.DateTimeFormat("fr-FR", {
-          day: "numeric", month: "short", timeZone: "Africa/Kinshasa",
+          day: "numeric", month: "short", timeZone,
           ...(period.value === "24h" ? { hour: "2-digit", minute: "2-digit" } : {}),
         });
 
@@ -146,6 +149,7 @@ function EnergyMeasurements({ buildingId, period }: { buildingId: string; period
           consumption: consumption.data.map(bucket => ({
             time: dateFormat.format(new Date(bucket.bucket)),
             kwh: bucket.total_kwh,
+            hasPower: bucket.avg_power_w !== undefined && bucket.avg_power_w !== null,
           })),
           zones: zones.data.map((zone, index) => ({
             id: zone.zoneId,
@@ -164,7 +168,7 @@ function EnergyMeasurements({ buildingId, period }: { buildingId: string; period
 
     void loadMeasurements();
     return () => controller.abort();
-  }, [buildingId, period.value, attempt]);
+  }, [buildingId, period.value, timeZone, attempt]);
 
   if (failed) {
     return (
@@ -181,11 +185,12 @@ function EnergyMeasurements({ buildingId, period }: { buildingId: string; period
   if (!data) return <p role="status" className="py-10 text-muted-foreground">Chargement des mesures d’énergie…</p>;
 
   const { summary, consumption, zones } = data;
+  const hasPower = summary.peakPowerW !== 0 || summary.avgPowerW !== 0 || consumption.some(bucket => bucket.hasPower);
   const indicators = [
-    { label: "Consommation totale", value: `${decimalNumber.format(summary.totalKwh)} kWh`, color: "border-t-emerald-500" },
-    { label: "Coût estimé", value: money.format(summary.estimatedCostUSD), color: "border-t-orange-500" },
-    { label: "Puissance maximale", value: `${wholeNumber.format(summary.peakPowerW)} W`, color: "border-t-blue-500" },
-    { label: "Puissance moyenne", value: `${wholeNumber.format(summary.avgPowerW)} W`, color: "border-t-purple-500" },
+    { label: "Consommation historique", value: consumption.length ? `${decimalNumber.format(summary.totalKwh)} kWh` : "Indisponible", color: "border-t-emerald-500" },
+    { label: "Coût estimé", value: consumption.length ? money.format(summary.estimatedCostUSD) : "Indisponible", color: "border-t-orange-500" },
+    { label: "Puissance maximale", value: !hasPower || summary.peakPowerW === null ? "Indisponible" : `${wholeNumber.format(summary.peakPowerW)} W`, color: "border-t-blue-500" },
+    { label: "Puissance moyenne", value: !hasPower || summary.avgPowerW === null ? "Indisponible" : `${wholeNumber.format(summary.avgPowerW)} W`, color: "border-t-purple-500" },
     { label: "Appareils mesurés", value: wholeNumber.format(summary.deviceCount), color: "border-t-emerald-500" },
   ];
 
@@ -286,6 +291,7 @@ function EnergyMeasurements({ buildingId, period }: { buildingId: string; period
 }
 
 function TenantEnergyPage({ role }: { role: User["role"] }) {
+  const query = useSearchParams();
   const [period, setPeriod] = useState<Period>(PERIODS[1]);
   const [selectedBuildingId, setSelectedBuildingId] = useState<string | null>(null);
   const { state, retry } = useDashboardBuildings();
@@ -293,7 +299,7 @@ function TenantEnergyPage({ role }: { role: User["role"] }) {
   const canManage = role === "SUPER_ADMIN" || role === "TENANT_ADMIN" || role === "BUILDING_ADMIN";
 
   const building = state.status === "ready"
-    ? state.buildings.find(item => item.id === (selectedBuildingId ?? state.savedBuildingId)) ?? state.buildings[0]
+    ? state.buildings.find(item => item.id === (selectedBuildingId ?? query.get("buildingId") ?? state.savedBuildingId)) ?? state.buildings[0]
     : undefined;
 
   let access: ExportAccess = "checking";
@@ -307,7 +313,7 @@ function TenantEnergyPage({ role }: { role: User["role"] }) {
     <div className="min-w-0 space-y-6">
       <header className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold">Énergie</h1>
+          <h1 className="text-2xl font-bold">Gestion énergétique</h1>
           {building && <p className="text-muted-foreground [overflow-wrap:anywhere]">{building.name}</p>}
         </div>
         {building && state.status === "ready" && state.buildings.length > 1 && (
@@ -355,7 +361,13 @@ function TenantEnergyPage({ role }: { role: User["role"] }) {
             </div>
             <EnergyExport key={`${building.id}:${period.value}`} buildingId={building.id} period={period} access={access} />
           </div>
-          <EnergyMeasurements key={`${building.id}:${period.value}`} buildingId={building.id} period={period} />
+          <EnergyManagement key={building.id} building={building} period={period.value} hours={period.hours}
+            canSimulate={canManage} initialTab={query.get("view")}
+            legacy={<>
+              <p className="text-sm text-muted-foreground">Ces indicateurs historiques reposent sur les séries par appareil et leur tarif global.</p>
+              <EnergyMeasurements key={period.value} buildingId={building.id} period={period} timeZone={siteTimeZone(building)} />
+            </>}
+          />
         </>
       )}
     </div>
@@ -369,9 +381,8 @@ export default function EnergyPage() {
   if (!user) return <p role="status" className="py-10 text-muted-foreground">Chargement du profil…</p>;
 
   return (
-    <TenantEnergyPage
-      key={`${user.id}:${user.role}:${impersonatedTenantId ?? user.tenantId}`}
-      role={user.role}
-    />
+    <Suspense fallback={<p role="status">Chargement de la vue Énergie…</p>}>
+      <TenantEnergyPage key={`${user.id}:${user.role}:${impersonatedTenantId ?? user.tenantId}`} role={user.role} />
+    </Suspense>
   );
 }

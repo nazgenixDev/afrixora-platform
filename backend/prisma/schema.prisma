@@ -29,6 +29,16 @@ enum SubscriptionStatus {
   TRIAL
 }
 
+enum DeviceCommandStatus {
+  PENDING
+  SENT
+  ACKNOWLEDGED
+  CONFIRMED
+  FAILED
+  EXPIRED
+  REJECTED
+}
+
 enum DeviceType {
   LIGHT
   PLUG
@@ -45,6 +55,7 @@ enum Protocol {
 }
 
 enum AlertType {
+  FUEL_DISCREPANCY
   THRESHOLD
   OFFLINE
   AUTOMATION
@@ -66,6 +77,113 @@ enum ZoneType {
   PARKING
 }
 
+enum EnergySourceType {
+  GRID
+  GENERATOR
+  PV_INVERTER
+  BATTERY_INVERTER
+  OTHER
+}
+
+enum EnergySourceStatus {
+  UNKNOWN
+  AVAILABLE
+  UNAVAILABLE
+  MAINTENANCE
+}
+
+enum FeedSwitchingMode {
+  UNKNOWN
+  DIRECT
+  MANUAL
+  AUTOMATIC_TRANSFER
+}
+
+enum FeedObservedState {
+  UNKNOWN
+  OPEN
+  CLOSED
+}
+
+enum ElectricalPhaseConfiguration {
+  UNKNOWN
+  SINGLE_PHASE
+  THREE_PHASE
+  DC
+}
+
+enum ElectricalPriority {
+  CRITICAL
+  IMPORTANT
+  FLEXIBLE
+}
+
+enum CircuitStatus {
+  UNKNOWN
+  IN_SERVICE
+  OUT_OF_SERVICE
+}
+
+enum ElectricalLoadCategory {
+  HVAC
+  LIGHTING
+  PUMP
+  REFRIGERATION
+  MACHINERY
+  OTHER
+}
+
+enum MeteringScope {
+  SOURCE
+  FEED
+  BOARD
+  CIRCUIT
+  LOAD
+}
+
+enum MeasurementMode {
+  CUMULATIVE
+  INTERVAL
+  INSTANTANEOUS
+}
+
+enum MeasurementQuality {
+  UNKNOWN
+  MEASURED
+  ESTIMATED
+  INVALID
+}
+
+enum MeteringFlowDirection {
+  UNSPECIFIED
+  IMPORT
+  EXPORT
+  BIDIRECTIONAL
+}
+
+enum ControlAction {
+  TURN_ON
+  TURN_OFF
+}
+
+enum ControlEndpointApproval {
+  PENDING
+  APPROVED
+  REVOKED
+}
+
+enum ControlVerificationMethod {
+  NONE
+  AUXILIARY_CONTACT
+  INDEPENDENT_METER
+}
+
+enum ControlVerifiedState {
+  UNKNOWN
+  ON
+  OFF
+}
+
 model Tenant {
   id                  String                @id @default(uuid())
   name                String
@@ -82,6 +200,7 @@ model Tenant {
 }
 
 model User {
+  buildingAccess BuildingAccess[]
   id           String   @id @default(uuid())
   tenantId     String
   tenant       Tenant   @relation(fields: [tenantId], references: [id])
@@ -93,68 +212,86 @@ model User {
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
 
+  @@unique([id, tenantId])
   @@index([tenantId])
 }
 
 model Building {
-  id          String       @id @default(uuid())
-  tenantId    String
-  tenant      Tenant       @relation(fields: [tenantId], references: [id])
-  name        String
-  address     String
-  city        String       @default("Lubumbashi")
-  unitsCount  Int          @default(0)
-  config      Json         @default("{}")
-  isActive    Boolean      @default(true)
-  createdAt   DateTime     @default(now())
-  zones       Zone[]
-  devices     Device[]
-  automations Automation[]
-  alerts      Alert[]
-  gateways    Gateway[]
+  buildingAccess BuildingAccess[]
+  id                 String              @id @default(uuid())
+  tenantId           String
+  tenant             Tenant              @relation(fields: [tenantId], references: [id])
+  name               String
+  address            String
+  city               String              @default("Lubumbashi")
+  timeZone           String?
+  unitsCount         Int                 @default(0)
+  config             Json                @default("{}")
+  isActive           Boolean             @default(true)
+  createdAt          DateTime            @default(now())
+  zones              Zone[]
+  devices            Device[]
+  automations        Automation[]
+  energyExchangeRates EnergyExchangeRate[]
+  alerts             Alert[]
+  gateways           Gateway[]
+  energySources      EnergySource[]
+  energyBuses        EnergyBus[]
+  sourceFeeds        SourceFeed[]
+  distributionBoards DistributionBoard[]
+  circuits           Circuit[]
+  electricalLoads    ElectricalLoad[]
+  meteringPoints     MeteringPoint[]
+  controlEndpoints   ControlEndpoint[]
 
-  @@index([tenantId])
   @@unique([id, tenantId])
+  @@index([tenantId])
 }
 
 model Zone {
-  id         String   @id @default(uuid())
-  tenantId   String
-  buildingId String
-  building   Building @relation(fields: [buildingId], references: [id])
-  name       String
-  floor      Int      @default(0)
-  type       ZoneType @default(ROOM)
-  devices    Device[]
+  id              String           @id @default(uuid())
+  tenantId        String
+  buildingId      String
+  building        Building         @relation(fields: [buildingId], references: [id])
+  name            String
+  floor           Int              @default(0)
+  type            ZoneType         @default(ROOM)
+  devices         Device[]
+  electricalLoads ElectricalLoad[]
 
+  @@unique([id, tenantId, buildingId])
   @@index([tenantId])
   @@index([buildingId])
-  @@unique([id, tenantId, buildingId])
 }
 
 model Device {
-  id         String        @id @default(uuid())
-  tenantId   String
-  buildingId String
-  zoneId     String?
-  name       String
-  type       DeviceType
-  protocol   Protocol      @default(MQTT)
-  macAddress String?       @unique
-  isOnline   Boolean       @default(false)
-  lastSeen   DateTime?
-  config     Json          @default("{}")
-  metadata   Json          @default("{}")
-  createdAt  DateTime      @default(now())
-  building   Building      @relation(fields: [buildingId], references: [id])
-  zone       Zone?         @relation(fields: [zoneId], references: [id])
-  states     DeviceState[]
-  alerts     Alert[]
+  id               String            @id @default(uuid())
+  tenantId         String
+  buildingId       String
+  zoneId           String?
+  name             String
+  type             DeviceType
+  protocol         Protocol          @default(MQTT)
+  macAddress       String?           @unique
+  isOnline         Boolean           @default(false)
+  lastSeen         DateTime?
+  config           Json              @default("{}")
+  metadata         Json              @default("{}")
+  createdAt        DateTime          @default(now())
+  building         Building          @relation(fields: [buildingId], references: [id])
+  zone             Zone?             @relation(fields: [zoneId], references: [id])
+  states           DeviceState[]
+  commands         DeviceCommand[]
+  fuelTanks        FuelTank[]
+  alerts           Alert[]
+  meteringPoints   MeteringPoint[]
+  controlEndpoints ControlEndpoint[]
 
-  @@index([tenantId, buildingId])
-  @@index([isOnline])
   @@unique([id, tenantId])
   @@unique([id, tenantId, buildingId])
+  @@unique([id, tenantId, buildingId, type])
+  @@index([tenantId, buildingId])
+  @@index([isOnline])
 }
 
 model DeviceState {
@@ -166,20 +303,523 @@ model DeviceState {
   device    Device   @relation(fields: [deviceId], references: [id])
 }
 
-model Automation {
-  id          String    @id @default(uuid())
+// CONFIRMED représente un état déclaré par le boîtier.
+model DeviceCommand {
+  id                String              @id @default(uuid())
+  tenantId          String
+  buildingId        String
+  deviceId          String
+  command           String
+  params            Json                @default("{}")
+  origin            String              @default("MANUAL")
+  requestedByUserId String?
+  status            DeviceCommandStatus @default(PENDING)
+  expiresAt         DateTime
+  sentAt            DateTime?
+  acknowledgedAt    DateTime?
+  confirmedAt       DateTime?
+  failedAt          DateTime?
+  observedState     Json?
+  error             String?
+  createdAt         DateTime            @default(now())
+  device            Device              @relation(fields: [deviceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict)
+
+  @@index([tenantId, deviceId, createdAt(sort: Desc)])
+  @@index([status, expiresAt])
+}
+
+model EnergySource {
+  archivedAt DateTime?
+  id             String             @id @default(uuid())
+  tenantId       String
+  buildingId     String
+  name           String
+  type           EnergySourceType
+  ratedPowerW    Decimal?           @db.Decimal(14, 3)
+  status         EnergySourceStatus @default(UNKNOWN)
+  metadata       Json               @default("{}")
+  createdAt      DateTime           @default(now())
+  building       Building           @relation(fields: [buildingId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Restrict)
+  feeds          SourceFeed[]
+  meteringPoints MeteringPoint[]
+  tariffs        EnergyTariff[]
+  generatorCosts GeneratorOperatingCost[]
+  fuelTanks      FuelTank[]
+  maintenanceHours MaintenanceHourReading[]
+  maintenancePlans MaintenancePlan[]
+
+  @@unique([id, tenantId, buildingId])
+  @@index([tenantId, buildingId])
+}
+
+enum EnergyCurrency {
+  USD
+  CDF
+}
+
+model EnergyTariff {
+  id             String         @id @default(uuid())
+  tenantId       String
+  buildingId     String
+  sourceId       String
+  currency       EnergyCurrency
+  unit           String         @default("KWH")
+  unitPrice      Decimal        @db.Decimal(20, 8)
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  createdAt      DateTime       @default(now())
+  source         EnergySource   @relation(fields: [sourceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([tenantId, buildingId, sourceId, effectiveFrom])
+}
+
+model EnergyExchangeRate {
+  id             String         @id @default(uuid())
+  tenantId       String
+  buildingId     String
+  cdfPerUsd      Decimal        @db.Decimal(20, 8)
+  rateSource     String
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  createdAt      DateTime       @default(now())
+  building       Building       @relation(fields: [buildingId, tenantId], references: [id, tenantId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([tenantId, buildingId, effectiveFrom])
+}
+
+model GeneratorOperatingCost {
+  id                     String             @id @default(uuid())
+  tenantId               String
+  buildingId             String
+  sourceId               String
+  periodFrom             DateTime
+  periodTo               DateTime
+  currency               EnergyCurrency
+  fuelLitres             Decimal?           @db.Decimal(20, 6)
+  fuelQuality            MeasurementQuality?
+  fuelPricePerLitre      Decimal?           @db.Decimal(20, 8)
+  engineHours            Decimal?           @db.Decimal(20, 6)
+  hoursQuality           MeasurementQuality?
+  maintenanceCostPerHour Decimal?           @db.Decimal(20, 8)
+  createdAt              DateTime           @default(now())
+  source                 EnergySource       @relation(fields: [sourceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([tenantId, buildingId, sourceId, periodFrom], map: "GeneratorOperatingCost_source_period_key")
+}
+
+enum FuelEngineState {
+  RUNNING
+  STOPPED
+  UNKNOWN
+}
+
+enum FuelAssessmentStatus {
+  WITHIN_RANGE
+  LOSS_TO_REVIEW
+  SURPLUS_TO_REVIEW
+}
+
+model FuelTank {
+  id                String             @id @default(uuid())
+  tenantId          String
+  buildingId        String
+  sourceId          String
+  probeDeviceId     String
+  productionPointId String
+  name              String
+  createdAt         DateTime           @default(now())
+  source            EnergySource       @relation(fields: [sourceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  probe             Device             @relation(fields: [probeDeviceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  productionPoint   MeteringPoint      @relation(fields: [productionPointId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  calibrations      FuelCalibration[]
+  deliveries        FuelDelivery[]
+  assessments       FuelAssessment[]
+
+  @@unique([id, tenantId, buildingId])
+  @@unique([tenantId, buildingId, sourceId])
+  @@unique([probeDeviceId, tenantId, buildingId])
+}
+
+model FuelCalibration {
+  id            String             @id @default(uuid())
+  tenantId      String
+  buildingId    String
+  tankId        String
+  effectiveFrom DateTime
+  profile       Json
+  createdAt     DateTime           @default(now())
+  tank          FuelTank           @relation(fields: [tankId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+  readings      FuelLevelReading[]
+
+  @@unique([id, tenantId, buildingId, tankId])
+  @@unique([tenantId, buildingId, tankId, effectiveFrom])
+}
+
+model FuelLevelReading {
+  id             String             @id @default(uuid())
+  tenantId       String
+  buildingId     String
+  tankId         String
+  calibrationId  String
+  capturedAt     DateTime
+  levelMm        Decimal            @db.Decimal(12, 3)
+  temperatureC   Decimal?           @db.Decimal(6, 3)
+  quality        MeasurementQuality
+  intervalState  FuelEngineState
+  createdAt      DateTime           @default(now())
+  calibration    FuelCalibration    @relation(fields: [calibrationId, tenantId, buildingId, tankId], references: [id, tenantId, buildingId, tankId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([tenantId, buildingId, tankId, capturedAt])
+}
+
+model FuelDelivery {
+  id                String   @id @default(uuid())
+  tenantId          String
+  buildingId        String
+  tankId            String
+  deliveredAt       DateTime
+  litresAt20C       Decimal  @db.Decimal(12, 3)
+  uncertaintyLitres Decimal  @db.Decimal(12, 3)
+  reference         String
+  createdAt         DateTime @default(now())
+  tank              FuelTank @relation(fields: [tankId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([tenantId, buildingId, tankId, reference])
+  @@index([tenantId, buildingId, tankId, deliveredAt])
+}
+
+model FuelAssessment {
+  id          String               @id @default(uuid())
   tenantId    String
   buildingId  String
-  name        String
-  isActive    Boolean   @default(true)
-  trigger     Json
-  conditions  Json      @default("[]")
-  action      Json
-  lastFiredAt DateTime?
-  createdAt   DateTime  @default(now())
-  building    Building  @relation(fields: [buildingId], references: [id])
+  tankId      String
+  periodFrom  DateTime
+  periodTo    DateTime
+  status      FuelAssessmentStatus
+  alertId     String?
+  evidence    Json
+  evidenceHash String
+  createdAt   DateTime             @default(now())
+  tank        FuelTank             @relation(fields: [tankId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+  alert       Alert?               @relation(fields: [alertId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
 
+  @@unique([tenantId, buildingId, tankId, periodFrom, periodTo, evidenceHash], map: "FuelAssessment_window_evidence_key")
+  @@index([alertId, tenantId, buildingId])
+}
+
+enum MaintenanceTicketStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum MaintenanceEventType {
+  OPENED
+  ASSIGNED
+  STARTED
+  INTERVENTION
+  CANCELLED
+}
+
+model MaintenanceHourReading {
+  id          String       @id @default(uuid())
+  tenantId    String
+  buildingId  String
+  sourceId    String
+  capturedAt  DateTime
+  totalHours  Decimal      @db.Decimal(14, 3)
+  recordedBy  String
+  createdAt   DateTime     @default(now())
+  source      EnergySource @relation(fields: [sourceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([tenantId, buildingId, sourceId, capturedAt], map: "MaintenanceHourReading_source_time_key")
+}
+
+model MaintenancePlan {
+  id                    String              @id @default(uuid())
+  tenantId              String
+  buildingId            String
+  sourceId              String
+  title                 String
+  manufacturerReference String
+  intervalDays          Int?
+  intervalHours         Decimal?            @db.Decimal(10, 3)
+  startsAt              DateTime
+  initialTotalHours     Decimal?            @db.Decimal(14, 3)
+  initialReadingId      String?
+  createdBy             String
+  createdAt             DateTime            @default(now())
+  source                EnergySource        @relation(fields: [sourceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+  tickets               MaintenanceTicket[]
+
+  @@unique([id, tenantId, buildingId])
+  @@index([tenantId, buildingId, sourceId])
+}
+
+model MaintenanceTicket {
+  id                  String                  @id @default(uuid())
+  tenantId            String
+  buildingId          String
+  planId              String
+  responsibleUserId   String
+  status              MaintenanceTicketStatus @default(OPEN)
+  description         String
+  performedAt         DateTime?
+  performedTotalHours Decimal?                @db.Decimal(14, 3)
+  createdAt           DateTime                @default(now())
+  plan                MaintenancePlan         @relation(fields: [planId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+  events              MaintenanceEvent[]
+
+  @@unique([id, tenantId, buildingId])
+  @@index([tenantId, buildingId, planId, performedAt])
+}
+
+model MaintenanceEvent {
+  id          String               @id @default(uuid())
+  tenantId    String
+  buildingId  String
+  ticketId    String
+  type        MaintenanceEventType
+  actorUserId String
+  details     Json
+  createdAt   DateTime             @default(now())
+  ticket      MaintenanceTicket    @relation(fields: [ticketId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([tenantId, buildingId, ticketId, createdAt])
+}
+
+model EnergyBus {
+  archivedAt DateTime?
+  id                 String              @id @default(uuid())
+  tenantId           String
+  buildingId         String
+  name               String
+  createdAt          DateTime            @default(now())
+  building           Building            @relation(fields: [buildingId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Restrict)
+  feeds              SourceFeed[]
+  distributionBoards DistributionBoard[]
+
+  @@unique([id, tenantId, buildingId])
+  @@index([tenantId, buildingId])
+}
+
+model SourceFeed {
+  archivedAt DateTime?
+  id                 String            @id @default(uuid())
+  tenantId           String
+  buildingId         String
+  sourceId           String
+  busId              String
+  name               String
+  switchingMode      FeedSwitchingMode @default(UNKNOWN)
+  switchingReference String?
+  isAllowed          Boolean           @default(false)
+  observedState      FeedObservedState @default(UNKNOWN)
+  observedAt         DateTime?
+  createdAt          DateTime          @default(now())
+  building           Building          @relation(fields: [buildingId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Restrict)
+  source             EnergySource      @relation(fields: [sourceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  bus                EnergyBus         @relation(fields: [busId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  meteringPoints     MeteringPoint[]
+
+  @@unique([id, tenantId, buildingId])
+  @@index([tenantId, buildingId, sourceId])
+  @@index([tenantId, buildingId, busId])
+}
+
+model DistributionBoard {
+  archivedAt DateTime?
+  id                 String                       @id @default(uuid())
+  tenantId           String
+  buildingId         String
+  busId              String
+  name               String
+  location           String?
+  nominalVoltageV    Decimal?                     @db.Decimal(10, 3)
+  phaseConfiguration ElectricalPhaseConfiguration @default(UNKNOWN)
+  createdAt          DateTime                     @default(now())
+  building           Building                     @relation(fields: [buildingId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Restrict)
+  bus                EnergyBus                    @relation(fields: [busId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  circuits           Circuit[]
+  meteringPoints     MeteringPoint[]
+
+  @@unique([id, tenantId, buildingId])
+  @@index([tenantId, buildingId, busId])
+}
+
+model Circuit {
+  archivedAt DateTime?
+  id                      String                       @id @default(uuid())
+  tenantId                String
+  buildingId              String
+  boardId                 String
+  code                    String
+  name                    String
+  priority                ElectricalPriority
+  status                  CircuitStatus                @default(UNKNOWN)
+  phaseConfiguration      ElectricalPhaseConfiguration @default(UNKNOWN)
+  ratedCurrentA           Decimal?                     @db.Decimal(10, 3)
+  protection              Json                         @default("{}")
+  isControllable          Boolean                      @default(false)
+  autoSheddingAllowed     Boolean                      @default(false)
+  createdAt               DateTime                     @default(now())
+  building                Building                     @relation(fields: [buildingId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Restrict)
+  board                   DistributionBoard            @relation(fields: [boardId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  loads                   ElectricalLoad[]
+  meteringPoints          MeteringPoint[]
+  controlEndpoints        ControlEndpoint[]            @relation("CircuitControlTarget")
+  enabledControlEndpoints ControlEndpoint[]            @relation("EnabledCircuitControlTarget")
+
+  @@unique([id, tenantId, buildingId])
+  @@unique([id, tenantId, buildingId, isControllable])
+  @@unique([tenantId, buildingId, code])
+  @@index([tenantId, buildingId, boardId])
+}
+
+model ElectricalLoad {
+  archivedAt DateTime?
+  id                      String                 @id @default(uuid())
+  tenantId                String
+  buildingId              String
+  circuitId               String
+  zoneId                  String?
+  name                    String
+  category                ElectricalLoadCategory
+  priority                ElectricalPriority
+  ratedPowerW             Decimal?               @db.Decimal(14, 3)
+  isControllable          Boolean                @default(false)
+  canBeAutomated          Boolean                @default(false)
+  minOnSeconds            Int?
+  minOffSeconds           Int?
+  maxInterruptionsPerHour Int?
+  createdAt               DateTime               @default(now())
+  building                Building               @relation(fields: [buildingId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Restrict)
+  circuit                 Circuit                @relation(fields: [circuitId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  zone                    Zone?                  @relation(fields: [zoneId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  meteringPoints          MeteringPoint[]
+  controlEndpoints        ControlEndpoint[]      @relation("LoadControlTarget")
+  enabledControlEndpoints ControlEndpoint[]      @relation("EnabledLoadControlTarget")
+
+  @@unique([id, tenantId, buildingId])
+  @@unique([id, tenantId, buildingId, isControllable])
+  @@index([tenantId, buildingId, circuitId])
+  @@index([tenantId, buildingId, zoneId])
+}
+
+// La portée et son unique cible sont vérifiées dans la migration SQL.
+model MeteringPoint {
+  archivedAt DateTime?
+  id              String                @id @default(uuid())
+  tenantId        String
+  buildingId      String
+  deviceId        String
+  deviceType      DeviceType            @default(ENERGY_METER)
+  sourceId        String?
+  feedId          String?
+  boardId         String?
+  circuitId       String?
+  loadId          String?
+  name            String
+  scope           MeteringScope
+  unit            String
+  measurementMode MeasurementMode
+  quality         MeasurementQuality    @default(UNKNOWN)
+  flowDirection   MeteringFlowDirection @default(UNSPECIFIED)
+  location        String?
+  calibration     Json                  @default("{}")
+  createdAt       DateTime              @default(now())
+  fuelTanks       FuelTank[]
+  building        Building              @relation(fields: [buildingId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Restrict)
+  device          Device                @relation(fields: [deviceId, tenantId, buildingId, deviceType], references: [id, tenantId, buildingId, type], onDelete: Restrict, onUpdate: Restrict)
+  source          EnergySource?         @relation(fields: [sourceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  feed            SourceFeed?           @relation(fields: [feedId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  board           DistributionBoard?    @relation(fields: [boardId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  circuit         Circuit?              @relation(fields: [circuitId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  load            ElectricalLoad?       @relation(fields: [loadId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([tenantId, buildingId, deviceId])
+  @@index([tenantId, buildingId, sourceId])
+  @@index([tenantId, buildingId, feedId])
+  @@index([tenantId, buildingId, boardId])
+  @@index([tenantId, buildingId, circuitId])
+  @@index([tenantId, buildingId, loadId])
+  @@unique([id, tenantId, buildingId])
+}
+
+// L’approbation du canal et la vérification physique décrivent deux faits distincts.
+model ControlEndpoint {
+  archivedAt DateTime?
+  id                         String                    @id @default(uuid())
+  tenantId                   String
+  buildingId                 String
+  deviceId                   String
+  targetCircuitId            String?
+  targetLoadId               String?
+  name                       String
+  declaredActions            ControlAction[]           @default([])
+  allowedActions             ControlAction[]           @default([])
+  approvalStatus             ControlEndpointApproval   @default(PENDING)
+  isEnabled                  Boolean                   @default(false)
+  // PostgreSQL calcule cette colonne. Un canal désactivé peut être inventorié avant l’approbation de sa cible.
+  requiresControllableTarget Boolean?                  @default(dbgenerated())
+  verificationMethod         ControlVerificationMethod @default(NONE)
+  verifiedState              ControlVerifiedState      @default(UNKNOWN)
+  verifiedAt                 DateTime?
+  constraints                Json                      @default("{}")
+  createdAt                  DateTime                  @default(now())
+  building                   Building                  @relation(fields: [buildingId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Restrict)
+  device                     Device                    @relation(fields: [deviceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  targetCircuit              Circuit?                  @relation("CircuitControlTarget", fields: [targetCircuitId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  targetLoad                 ElectricalLoad?           @relation("LoadControlTarget", fields: [targetLoadId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  enabledTargetCircuit       Circuit?                  @relation("EnabledCircuitControlTarget", fields: [targetCircuitId, tenantId, buildingId, requiresControllableTarget], references: [id, tenantId, buildingId, isControllable], onDelete: Restrict, onUpdate: Restrict, map: "ControlEndpoint_enabled_circuit_fkey")
+  enabledTargetLoad          ElectricalLoad?           @relation("EnabledLoadControlTarget", fields: [targetLoadId, tenantId, buildingId, requiresControllableTarget], references: [id, tenantId, buildingId, isControllable], onDelete: Restrict, onUpdate: Restrict, map: "ControlEndpoint_enabled_load_fkey")
+
+  @@index([tenantId, buildingId, deviceId])
+  @@index([tenantId, buildingId, targetCircuitId])
+  @@index([tenantId, buildingId, targetLoadId])
+}
+
+model Automation {
+  id             String                @id @default(uuid())
+  tenantId       String
+  buildingId     String
+  name           String
+  isActive       Boolean               @default(true)
+  simulationOnly Boolean               @default(false)
+  trigger        Json
+  conditions     Json                  @default("[]")
+  action         Json
+  lastFiredAt    DateTime?
+  createdAt      DateTime              @default(now())
+  building       Building              @relation(fields: [buildingId], references: [id])
+  simulations    AutomationExecution[]
+
+  @@unique([id, tenantId, buildingId])
   @@index([tenantId, buildingId, isActive])
+}
+
+model AutomationExecution {
+  id            String     @id @default(uuid())
+  tenantId      String
+  buildingId    String
+  automationId  String
+  scenarioId    String
+  requestId     String
+  requestHash   String
+  evaluatedAt   DateTime
+  createdAt     DateTime   @default(now())
+  inputSnapshot Json
+  decision      String
+  reason        String
+  result        Json
+  action        String?
+  targetLoadId  String?
+  automation    Automation @relation(fields: [automationId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([automationId, scenarioId, requestId])
+  @@unique([automationId, scenarioId, evaluatedAt])
+  @@index([tenantId, buildingId, automationId, evaluatedAt(sort: Desc)], map: "AutomationExecution_site_rule_time_idx")
 }
 
 model Alert {
@@ -194,10 +834,12 @@ model Alert {
   isRead     Boolean   @default(false)
   resolvedAt DateTime?
   createdAt  DateTime  @default(now())
+  fuelAssessments FuelAssessment[]
   building   Building  @relation(fields: [buildingId], references: [id])
   device     Device?   @relation(fields: [deviceId], references: [id])
 
   @@index([tenantId, buildingId, isRead])
+  @@unique([id, tenantId, buildingId])
 }
 
 model Gateway {
@@ -260,4 +902,15 @@ model SubscriptionHistory {
   createdAt         DateTime           @default(now())
 
   @@index([tenantId])
+}
+
+model BuildingAccess {
+  tenantId   String
+  buildingId String
+  userId     String
+  building   Building @relation(fields: [buildingId, tenantId], references: [id, tenantId], onDelete: Cascade, onUpdate: Restrict)
+  user       User     @relation(fields: [userId, tenantId], references: [id, tenantId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@id([tenantId, buildingId, userId])
+  @@index([userId, tenantId])
 }

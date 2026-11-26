@@ -5,5 +5,6 @@ topic read afrixora/+/+/devices/+/readings
 topic read afrixora/+/+/devices/+/events
 topic read afrixora/+/+/gateways/+/status
 topic write afrixora/+/+/devices/+/commands
+topic write afrixora/+/+/devices/+/telemetry-ack
 
 # Les blocs par passerelle sont générés par infrastructure/scripts/create-mqtt-gateway-user.sh.

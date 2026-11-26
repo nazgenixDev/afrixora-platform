@@ -31,6 +31,7 @@ export const generateCSV = async (
     FROM sensor_readings sr
     JOIN devices d ON sr.device_id = d.device_id
     WHERE sr.tenant_id = $1::uuid
+      AND sr.metering_point_id IS NULL
       AND sr.time BETWEEN $3::timestamptz AND $4::timestamptz
     ORDER BY sr.time ASC
     LIMIT $5

@@ -1,0 +1,37 @@
+erDiagram
+    %% Le bâtiment du tenant encadre les huit nouvelles entités.
+    Tenant ||--o{ Building : "possède"
+    Building ||--o{ EnergySource : recense
+    Building ||--o{ EnergyBus : recense
+    Building ||--o{ SourceFeed : recense
+    Building ||--o{ DistributionBoard : recense
+    Building ||--o{ Circuit : recense
+    Building ||--o{ ElectricalLoad : recense
+    Building ||--o{ MeteringPoint : recense
+    Building ||--o{ ControlEndpoint : recense
+    Building ||--o{ Zone : contient
+    Building ||--o{ Device : inventorie
+
+    EnergySource ||--o{ SourceFeed : origine
+    EnergyBus ||--o{ SourceFeed : destination
+    EnergyBus ||--o{ DistributionBoard : dessert
+    DistributionBoard ||--o{ Circuit : contient
+    Circuit ||--o{ ElectricalLoad : alimente
+    Zone o|--o{ ElectricalLoad : localise
+
+    %% Chaque point a exactement une des cinq cibles. Son Device est un ENERGY_METER.
+    Device ||--o{ MeteringPoint : fournit_la_mesure
+    EnergySource o|--o{ MeteringPoint : cible_SOURCE
+    SourceFeed o|--o{ MeteringPoint : cible_FEED
+    DistributionBoard o|--o{ MeteringPoint : cible_BOARD
+    Circuit o|--o{ MeteringPoint : cible_CIRCUIT
+    ElectricalLoad o|--o{ MeteringPoint : cible_LOAD
+
+    %% Chaque canal a exactement une des deux cibles. Il est désactivé par défaut.
+    %% Un canal activé exige une cible pilotable. Le désactiver avant de retirer cette capacité à la cible.
+    Device ||--o{ ControlEndpoint : "déclare le canal"
+    Circuit o|--o{ ControlEndpoint : cible_circuit
+    ElectricalLoad o|--o{ ControlEndpoint : cible_charge
+
+    %% Le journal existant reste lié à Device pendant cette phase.
+    Device ||--o{ DeviceCommand : journalise

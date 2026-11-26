@@ -115,13 +115,26 @@ router.post(
   validate(controlDeviceSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const result = await deviceService.control(deviceId.parse(req.params.id), res.locals.validatedBody, req.user!.tenantId);
-      return res.json(result);
+      const { tenantId, userId } = req.user!;
+      const result = await deviceService.control(deviceId.parse(req.params.id), res.locals.validatedBody, tenantId,
+        { requestedByUserId: userId });
+      return res.status(202).json(result);
     } catch (error) {
       return next(error);
     }
   }
 );
+
+router.get('/:id/commands/:commandId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await deviceService.getCommand(
+      deviceId.parse(req.params.id), z.uuid().parse(req.params.commandId), req.user!.tenantId,
+    );
+    return res.set('Cache-Control', 'no-store').json(result);
+  } catch (error) {
+    return next(error);
+  }
+});
 
 router.get('/:id/history', async (req: Request, res: Response, next: NextFunction) => {
   try {

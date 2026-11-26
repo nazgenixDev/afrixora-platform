@@ -21,8 +21,21 @@ interface AlertPage {
   totalPages: number;
 }
 
+type Actor = { tenantId: string; userId: string; role: string };
+
+function fuelAlertVisibility(actor: Actor): Prisma.AlertWhereInput {
+  if (actor.role === 'SUPER_ADMIN' || actor.role === 'TENANT_ADMIN') return {};
+  return {
+    OR: [
+      { type: { not: 'FUEL_DISCREPANCY' } },
+      { building: { isActive: true, buildingAccess: { some: { userId: actor.userId, tenantId: actor.tenantId } } } },
+    ],
+  };
+}
+
 export const alertService = {
-  async findAll(tenantId: string, filters: AlertFilters, { page, limit }: Pagination): Promise<AlertPage> {
+  async findAll(actor: Actor, filters: AlertFilters, { page, limit }: Pagination): Promise<AlertPage> {
+    const { tenantId } = actor;
     const { buildingId, isRead, severity, type } = filters;
     if (buildingId !== undefined) {
       const building = await prisma.building.findFirst({
@@ -35,6 +48,7 @@ export const alertService = {
     const where: Prisma.AlertWhereInput = {
       buildingId, isRead, severity, type, tenantId,
       building: { tenantId },
+      AND: fuelAlertVisibility(actor),
       OR: [{ deviceId: null }, { device: { tenantId } }],
     };
     const [data, total] = await prisma.$transaction([
@@ -50,8 +64,9 @@ export const alertService = {
     return { data, total, page, totalPages: Math.ceil(total / limit) };
   },
 
-  async markAsRead(id: string, tenantId: string): Promise<Alert> {
-    const where = { id, tenantId, building: { tenantId }, OR: [{ deviceId: null }, { device: { tenantId } }] };
+  async markAsRead(id: string, actor: Actor): Promise<Alert> {
+    const { tenantId } = actor;
+    const where = { id, tenantId, building: { tenantId }, AND: fuelAlertVisibility(actor), OR: [{ deviceId: null }, { device: { tenantId } }] };
     const alert = await prisma.alert.findFirst({ where, select: { id: true } });
     if (!alert) throw new NotFoundError('Alerte introuvable');
 

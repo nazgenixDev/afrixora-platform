@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { DeviceCommandStatus } from '@prisma/client';
 import { z } from 'zod';
 import { Server } from 'socket.io';
 import mqtt from 'mqtt';
@@ -6,9 +7,13 @@ import logger from '../utils/logger';
 import { prisma, query } from '../utils/database';
 import { getRedisClient, isRedisConnected } from '../utils/redis';
 import automationEngine from './automationEngine';
+import { parseTelemetry, persistTelemetry, telemetrySchema, type Telemetry } from './energyTelemetry';
+import { handleTelemetryReplay } from './telemetryReplay';
 
 let mqttClient: mqtt.MqttClient | null = null;
 let subscriptionsReady = false;
+const pendingPublications = new Map<number, (error: Error) => void>();
+const MAX_PENDING_PUBLICATIONS = 100;
 let retryRunning = false;
 
 const BUFFER_KEY_PREFIX = 'mqtt_buffer:';
@@ -25,9 +30,19 @@ const MAX_PAYLOAD_BYTES = 64 * 1024;
 
 type DeviceScope = { tenantId: string; buildingId: string; deviceId: string };
 type Measurement = DeviceScope & { metric: string; value: number; unit: string | null };
+type BufferedMeasurement = Measurement & { telemetry?: Telemetry; telemetryReceivedAt?: number };
 
 const deviceCache = new Map<string, { expiresAt: number; verified: Promise<boolean> }>();
 const isoTimestamp = z.string().datetime({ offset: true });
+
+const commandIdSchema = z.string().uuid();
+const commandAckSchema = z.discriminatedUnion('status', [
+  z.object({ commandId: commandIdSchema, status: z.literal('ACKNOWLEDGED') }),
+  z.object({ commandId: commandIdSchema, status: z.literal('CONFIRMED'),
+    observedState: z.object({ state: z.enum(['on', 'off']) }),
+  }),
+  z.object({ commandId: commandIdSchema, status: z.literal('FAILED') }),
+]);
 
 const bufferedEntrySchema = z.object({
   id: z.string().optional(),
@@ -38,6 +53,8 @@ const bufferedEntrySchema = z.object({
   value: z.unknown(),
   unit: z.unknown(),
   timestamp: z.union([z.string(), z.number().int()]),
+  telemetry: telemetrySchema.optional(),
+  telemetryReceivedAt: z.number().int().nonnegative().optional(),
   queuedAt: z.number().int().nonnegative().optional(),
   nextRetryAt: z.number().int().nonnegative().optional(),
   retryCount: z.number().int().nonnegative().default(0),
@@ -137,27 +154,55 @@ export function isMqttReady(): boolean {
   return mqttClient?.connected === true && subscriptionsReady;
 }
 
-/**
- * Publish a message to an MQTT topic using the shared client
- * @param topic MQTT topic
- * @param payload Message payload (object or string)
- * @returns Promise that resolves when the message is published
- */
-export const publishMqtt = (topic: string, payload: unknown): Promise<void> => {
+// Les publications éphémères ne survivent pas à une coupure du transport.
+export function publishMqtt(topic: string, payload: unknown, expiresAt: Date): Promise<void> {
+  const client = mqttClient;
+  const remainingMs = expiresAt.getTime() - Date.now();
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+    return Promise.reject(new Error('Délai de publication MQTT dépassé'));
+  }
+  if (!client?.connected || !subscriptionsReady || pendingPublications.size >= MAX_PENDING_PUBLICATIONS) {
+    return Promise.reject(new Error('Transport MQTT indisponible'));
+  }
+
   return new Promise((resolve, reject) => {
-    if (!mqttClient || !mqttClient.connected) {
-      reject(new Error('MQTT client not connected'));
-      return;
-    }
-    const payloadString = typeof payload === 'string' ? payload : JSON.stringify(payload);
-    mqttClient.publish(topic, payloadString, { qos: 1 }, (error) => {
+    let messageId: number | undefined;
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (messageId !== undefined) pendingPublications.delete(messageId);
       if (error) reject(error);
       else resolve();
-    });
-  });
-};
+    };
+    const cancel = (error: Error) => {
+      finish(error);
+      if (messageId !== undefined) client.removeOutgoingMessage(messageId);
+    };
+    const timer = setTimeout(() => cancel(new Error('Délai de publication MQTT dépassé')), remainingMs);
 
-async function bufferMessage(reading: Measurement, time: Date): Promise<void> {
+    try {
+      client.publish(topic, JSON.stringify(payload), {
+        qos: 1,
+        retain: false,
+        properties: { messageExpiryInterval: Math.ceil(remainingMs / 1000) },
+        // Le magasin MQTT.js attribue l’identifiant avant d’écrire le paquet.
+        cbStorePut: () => {
+          messageId = client.getLastMessageId();
+          if (settled) client.removeOutgoingMessage(messageId);
+          else pendingPublications.set(messageId, cancel);
+        },
+      }, (error) => {
+        finish(error || (Date.now() >= expiresAt.getTime() ? new Error('Délai de publication MQTT dépassé') : undefined));
+      });
+    } catch (error) {
+      cancel(error instanceof Error ? error : new Error('Échec de publication MQTT'));
+    }
+  });
+}
+
+async function bufferMessage(reading: BufferedMeasurement, time: Date): Promise<void> {
   const { tenantId, deviceId, metric } = reading;
   try {
     const queuedAt = Date.now();
@@ -229,7 +274,14 @@ async function retryEntry(key: string, raw: string, token: string): Promise<void
       );
       if (current !== 1) return;
       try {
-        if (!await insertReading({ ...entry, value, unit: metricUnit(entry.unit) }, time)) {
+        if (entry.telemetry) {
+          const receivedAt = entry.telemetryReceivedAt;
+          if (receivedAt === undefined || !parseTelemetry(entry.telemetry, entry, receivedAt)) {
+            discarded = 'télémétrie V2 invalide';
+          } else if (await persistTelemetry(entry, entry.telemetry, receivedAt) === 'rejected') {
+            discarded = 'point de mesure hors du périmètre ou incompatible';
+          }
+        } else if (!await insertReading({ ...entry, value, unit: metricUnit(entry.unit) }, time)) {
           discarded = 'appareil hors du périmètre';
         }
       } catch {
@@ -324,10 +376,21 @@ async function retryBuffer(): Promise<void> {
  */
 export const connectMQTT = (io: Server): void => {
   const url = process.env.MQTT_URL || 'mqtt://localhost:1883';
+  if (process.env.NODE_ENV === 'production') {
+    const { protocol, hostname } = new URL(url);
+    const internalBroker = protocol === 'mqtt:' && hostname === 'mosquitto';
+    if (!internalBroker && protocol !== 'mqtts:' && protocol !== 'wss:') {
+      throw new Error('Le broker MQTT distant exige une connexion TLS en production');
+    }
+  }
   const options: mqtt.IClientOptions = {
     username: process.env.MQTT_API_USER,
     password: process.env.MQTT_API_PASSWORD,
     reconnectPeriod: 5000,
+    // Les abonnements sont rétablis et contrôlés au prochain SUBACK.
+    resubscribe: false,
+    protocolVersion: 5,
+    rejectUnauthorized: true,
     clientId: `afrixora-backend-${Math.random().toString(16).substring(2, 8)}`,
   };
 
@@ -345,15 +408,22 @@ export const connectMQTT = (io: Server): void => {
       'afrixora/+/+/gateways/+/status'
     ];
     
-    mqttClient!.subscribe(topics, { qos: 1 }, (err, grants) => {
+    mqttClient!.subscribe(topics, { qos: 1, rap: true }, (err, grants) => {
       subscriptionsReady = !err && !!grants && grants.length === topics.length
-        && grants.every(({ qos }) => qos < 128);
+        && grants.every(({ qos }) => qos === 1);
       if (!subscriptionsReady) {
         logger.error('mqtt_subscribe_failed', { errorType: err?.name });
       } else {
         logger.info('Subscribed to MQTT topics', { topics });
       }
     });
+  });
+
+  mqttClient.on('close', () => {
+    subscriptionsReady = false;
+    for (const cancel of pendingPublications.values()) {
+      cancel(new Error('Connexion MQTT interrompue'));
+    }
   });
 
   mqttClient.on('reconnect', () => {
@@ -368,7 +438,7 @@ export const connectMQTT = (io: Server): void => {
     logger.error('mqtt_client_error', { errorType: error.name });
   });
 
-  mqttClient.on('message', async (topic, payload) => {
+  mqttClient.on('message', async (topic, payload, packet) => {
     const receivedAt = Date.now();
     try {
       const parts = topic.split('/');
@@ -387,10 +457,6 @@ export const connectMQTT = (io: Server): void => {
       }
 
       const scope = { tenantId, buildingId, deviceId: id };
-      if (isDeviceMessage && !await belongsToScope(scope)) {
-        logger.warn('mqtt_device_scope_rejected', scope);
-        return;
-      }
       const payloadData: unknown = JSON.parse(payload.toString());
       if (!isRecord(payloadData)) {
         logger.warn('mqtt_payload_invalid', scope);
@@ -398,8 +464,22 @@ export const connectMQTT = (io: Server): void => {
       }
 
       if (isDeviceMessage) {
+        if (kind === 'readings' && payloadData.type === 'telemetry_batch') {
+          if (!packet?.retain && isMqttReady()) await handleTelemetryReplay(scope, payloadData, receivedAt, belongsToScope, publishMqtt);
+          return;
+        }
+        if (kind === 'readings' && payloadData.schemaVersion !== undefined && payloadData.schemaVersion !== 1) {
+          if (!packet?.retain) await handleVersionedReading(scope, payloadData, receivedAt);
+          return;
+        }
+        if (!await belongsToScope(scope)) {
+          logger.warn('mqtt_device_scope_rejected', scope);
+          return;
+        }
         if (kind === 'readings') {
           await handleDeviceReadings(scope, payloadData, receivedAt, io);
+        } else if (payloadData.type === 'command_ack') {
+          if (!packet?.retain && await markDeviceSeen(scope)) await handleCommandAck(scope, payloadData, io);
         } else if (await markDeviceSeen(scope)) {
           io.to(`building:${buildingId}`).emit('device:event', { ...payloadData, deviceId: id });
         }
@@ -423,6 +503,53 @@ export const connectMQTT = (io: Server): void => {
   setInterval(retryBuffer, RETRY_INTERVAL_MS);
 };
 
+// CONFIRMED désigne l'état déclaré par le boîtier.
+async function handleCommandAck(scope: DeviceScope, event: Record<string, unknown>, io: Server): Promise<void> {
+  const parsed = commandAckSchema.safeParse(event);
+  if (!parsed.success) return;
+
+  const ack = parsed.data;
+  const { status, commandId } = ack;
+  const updated = await prisma.$transaction(async (tx) => {
+    const statuses: DeviceCommandStatus[] = ['PENDING', 'SENT'];
+    if (status !== 'ACKNOWLEDGED') statuses.push('ACKNOWLEDGED');
+    const eligible = { ...scope, id: commandId, expiresAt: { gt: new Date() }, status: { in: statuses } };
+
+    if (ack.status === 'CONFIRMED') {
+      const current = await tx.deviceCommand.findFirst({ where: eligible, select: { params: true } });
+      if (!current || !isRecord(current.params) || current.params.state !== ack.observedState.state) return false;
+    }
+
+    const now = new Date();
+    const result = await tx.deviceCommand.updateMany({
+      where: { ...eligible, expiresAt: { gt: now } },
+      data: {
+        status,
+        ...(ack.status === 'ACKNOWLEDGED' ? { acknowledgedAt: now } : {}),
+        ...(ack.status === 'CONFIRMED' ? { confirmedAt: now, observedState: ack.observedState } : {}),
+        ...(ack.status === 'FAILED' ? { failedAt: now, error: 'Échec signalé par le boîtier' } : {}),
+      },
+    });
+    if (!result.count) return false;
+
+    if (ack.status === 'CONFIRMED') {
+      const { deviceId, tenantId } = scope;
+      const state = { ...ack.observedState, source: 'device_reported' };
+      await tx.deviceState.upsert({
+        where: { deviceId, tenantId },
+        update: { state },
+        create: { deviceId, tenantId, state },
+      });
+    }
+    return true;
+  });
+  if (updated) {
+    io.to(`building:${scope.buildingId}`).emit('device:command', {
+      deviceId: scope.deviceId, commandId, status,
+    });
+  }
+}
+
 async function markDeviceSeen(scope: DeviceScope): Promise<boolean> {
   const result = await prisma.device.updateMany({
     where: deviceWhere(scope),
@@ -433,6 +560,30 @@ async function markDeviceSeen(scope: DeviceScope): Promise<boolean> {
   deviceCache.delete(deviceCacheKey(scope));
   logger.warn('Appareil MQTT introuvable lors de la mise à jour du statut', scope);
   return false;
+}
+
+async function handleVersionedReading(scope: DeviceScope, payload: unknown, receivedAt: number): Promise<void> {
+  const telemetry = parseTelemetry(payload, scope, receivedAt);
+  if (!telemetry) {
+    logger.warn('mqtt_telemetry_v2_invalid', scope);
+    return;
+  }
+
+  let result;
+  try {
+    result = await persistTelemetry(scope, telemetry, receivedAt);
+  } catch (error) {
+    logger.error('mqtt_telemetry_v2_insert_failed', { ...scope, errorType: (error as Error).name });
+    const { metric, value, unit } = telemetry;
+    await bufferMessage({ ...scope, metric, value, unit, telemetry, telemetryReceivedAt: receivedAt }, new Date(telemetry.capturedAt));
+    return;
+  }
+
+  if (result === 'rejected') {
+    logger.warn('mqtt_telemetry_v2_scope_or_mode_rejected', scope);
+  } else if (result === 'stored') {
+    await markDeviceSeen(scope);
+  }
 }
 
 async function handleDeviceReadings(
