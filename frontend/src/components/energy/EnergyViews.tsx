@@ -172,28 +172,122 @@ export function useHistoricalEstimate(buildingId: string, period: string) {
   return useEnergyRequest(loadEstimate);
 }
 
-export function FinanceView({ topology, energy, estimate }: {
-  topology: Topology; energy: MeteredEnergy | null; estimate: ReturnType<typeof useHistoricalEstimate>;
+type Currency = "USD" | "CDF";
+type CostAmounts = { currency: Currency; calculatedAmount: string | null; estimatedAmount: string | null; hasMissingData: boolean };
+type EnergyCost = CostAmounts & {
+  reasons: string[];
+  bySource: { sourceId: string | null; sourceType: string; measuredKWh: string; estimatedKWh: string;
+    unpricedKWh: string; calculatedAmount: string | null; estimatedAmount: string | null; reasons: string[] }[];
+  references: { tariff: { id: string; sourceId: string; unit: string; unitPrice: string; currency: Currency;
+    effectiveFrom: string; effectiveTo: string | null };
+    exchangeRate: { id: string; rateSource: string; cdfPerUsd: string; effectiveFrom: string; effectiveTo: string | null } | null }[];
+};
+type GeneratorCost = {
+  entry: { id: string; periodFrom: string; periodTo: string; fuelLitres: string | null; engineHours: string | null };
+  quote: CostAmounts;
+};
+const costReasons: Record<string, string> = {
+  MEASUREMENT_GAPS: "Couverture de mesure incomplète",
+  NO_ENERGY_DATA: "Aucune énergie exploitable",
+  SOURCE_UNKNOWN: "Source inconnue",
+  INTERVAL_START_UNKNOWN: "Début de l’intervalle inconnu",
+  TARIFF_NOT_COVERED: "Tarif absent ou changement de tarif pendant l’intervalle",
+  EXCHANGE_RATE_NOT_COVERED: "Taux absent ou changement de taux pendant l’intervalle",
+};
+
+function costLine(cost: { calculatedAmount: string | null; estimatedAmount: string | null }, currency: Currency) {
+  const display = (value: string | null) => value === null ? "indisponible" : `${value.replace(".", ",")} ${currency}`;
+  return `Sur mesures : ${display(cost.calculatedAmount)} · Estimé : ${display(cost.estimatedAmount)}`;
+}
+
+function GeneratorCosts({ topology, buildingId, from, to, currency, timeZone }: {
+  topology: Topology; buildingId: string; from: string; to: string; currency: Currency; timeZone: string;
 }) {
-  const { result, reload } = estimate;
-  const sourceNames = new Map(topology.sources.map(source => [source.id, source.name]));
-  return <div className="grid gap-4 lg:grid-cols-2">
-    <EnergyPanel title="Énergie par source attribuée">
-      <EnergyList items={(energy?.bySource ?? []).map(source => ({ ...source, id: source.sourceId ?? "unknown" }))}
-        empty="Aucune attribution disponible pour le point et la période choisis." render={source => <>
-          <strong>{(source.sourceId && sourceNames.get(source.sourceId)) || sourceTypes[source.sourceType] || "Source non attribuée"}</strong>
-          <p className="text-muted-foreground">Mesurée : {formatReading(source.measuredKWh, "kWh")} · Estimée : {formatReading(source.estimatedKWh, "kWh")}</p>
-          <p className="text-xs text-muted-foreground">Dépense indisponible · tarif par source absent</p>
+  const [selection, setSelection] = useState({ sourceId: "", page: 1 });
+  const generators = topology.sources.filter(source => source.type === "GENERATOR");
+  const { sourceId, page } = selection;
+  const { result, reload } = useEnergyQuery<PaginatedResponse<GeneratorCost>>(sourceId ? "/api/v1/energy/finance/generator-costs" : null,
+    new URLSearchParams({ buildingId, sourceId, from, to, currency, page: String(page), limit: "8" }).toString());
+  return <EnergyPanel title="Coûts d’exploitation du groupe">
+    {generators.length ? <label className="block space-y-1 text-sm font-medium">
+      <span>Groupe électrogène</span>
+      <select className={selectClass} value={sourceId} onChange={event => setSelection({ sourceId: event.target.value, page: 1 })}>
+        <option value="">Sélectionner un groupe</option>
+        {generators.map(source => <option key={source.id} value={source.id}>{source.name}</option>)}
+      </select>
+    </label> : <p className="text-sm text-muted-foreground">Aucun groupe répertorié.</p>}
+    <EnergyRequestState status={result.status} reload={reload} />
+    {result.status === "ready" && <>
+      <EnergyList items={result.data.data.map(cost => ({ ...cost, id: cost.entry.id }))}
+        empty="Aucun relevé entièrement compris dans cette période." render={({ entry, quote }) => <>
+          <p className="font-medium">{dateLabel(entry.periodFrom, timeZone)} – {dateLabel(entry.periodTo, timeZone)}</p>
+          <p className="mt-1">{costLine(quote, currency)}</p>
+          <p className="text-muted-foreground">{entry.fuelLitres === null ? "Carburant inconnu" : `${entry.fuelLitres.replace(".", ",")} L`}
+            {" · "}{entry.engineHours === null ? "Heures moteur inconnues" : `${entry.engineHours.replace(".", ",")} h moteur`}</p>
+          {quote.hasMissingData && <p className="text-muted-foreground">Relevé, prix ou taux incomplet.</p>}
         </>} />
-    </EnergyPanel>
-    <EnergyPanel title="Estimation historique en USD">
-      <EnergyRequestState status={result.status} reload={reload} />
-      {result.status === "ready" && <p className="text-xl font-semibold">
-        {typeof result.data === "number" && Number.isFinite(result.data) ? money.format(result.data) : "Indisponible"}
-      </p>}
-      <p className="text-sm text-muted-foreground">Montant fourni par l’analyse historique au tarif global configuré. La version du tarif, sa date d’effet et le taux USD/CDF sont indisponibles.</p>
-    </EnergyPanel>
-  </div>;
+      <PaginationControls page={page} totalPages={result.data.totalPages}
+        onPageChange={next => setSelection({ sourceId, page: next })} loading={false} />
+    </>}
+    <p className="text-xs text-muted-foreground">Carburant et provision d’entretien. Ce montant est présenté séparément du tarif au kWh.</p>
+  </EnergyPanel>;
+}
+
+export function FinanceView({ topology, buildingId, meteringPointId, from, to, timeZone, estimate }: {
+  topology: Topology; buildingId: string; meteringPointId: string; from: string; to: string; timeZone: string;
+  estimate: ReturnType<typeof useHistoricalEstimate>;
+}) {
+  const [currency, setCurrency] = useState<Currency>("USD");
+  const { result, reload } = useEnergyQuery<EnergyCost>(meteringPointId ? "/api/v1/energy/finance/costs" : null,
+    new URLSearchParams({ buildingId, meteringPointId, from, to, currency }).toString());
+  const sourceNames = new Map(topology.sources.map(source => [source.id, source.name]));
+  const historical = estimate.result;
+  return <>
+    <label className="block max-w-xs space-y-1 text-sm font-medium">
+      <span>Devise de calcul</span>
+      <select className={selectClass} value={currency} onChange={event => setCurrency(event.target.value === "CDF" ? "CDF" : "USD")}>
+        <option value="USD">USD</option><option value="CDF">CDF</option>
+      </select>
+    </label>
+    <div className="grid gap-4 lg:grid-cols-2">
+      <EnergyPanel title="Coûts par source">
+        <EnergyRequestState status={result.status} reload={reload} />
+        {result.status === "idle" && <p className="text-sm text-muted-foreground">Sélectionnez un point d’import sur tableau général.</p>}
+        {result.status === "ready" && <>
+          <p className="font-semibold">{costLine(result.data, currency)}</p>
+          {result.data.hasMissingData && <p className="text-sm text-muted-foreground">
+            Couverture partielle · {result.data.reasons.map(reason => costReasons[reason] ?? "Donnée manquante").join(" · ")}
+          </p>}
+          <EnergyList items={result.data.bySource.map(source => ({ ...source, id: source.sourceId ?? "unknown" }))}
+            empty="Aucune attribution disponible sur cette période." render={source => <>
+              <strong>{(source.sourceId && sourceNames.get(source.sourceId)) || sourceTypes[source.sourceType] || "Source non attribuée"}</strong>
+              <p>{costLine(source, currency)}</p>
+              <p className="text-muted-foreground">Mesuré : {source.measuredKWh.replace(".", ",")} kWh · Estimé : {source.estimatedKWh.replace(".", ",")} kWh</p>
+              {!!source.reasons.length && <p className="text-muted-foreground">{source.unpricedKWh.replace(".", ",")} kWh sans valorisation</p>}
+            </>} />
+          <details className="text-sm">
+            <summary className="cursor-pointer font-medium">Tarifs et taux appliqués</summary>
+            <EnergyList items={result.data.references.map(reference => ({ ...reference, id: `${reference.tariff.id}-${reference.exchangeRate?.id ?? ""}` }))}
+              empty="Aucun tarif appliqué." render={({ tariff, exchangeRate }) => <>
+                <p>{sourceNames.get(tariff.sourceId) ?? "Source archivée"} · {tariff.unitPrice.replace(".", ",")} {tariff.currency}/kWh</p>
+                <p className="text-muted-foreground">Tarif du {dateLabel(tariff.effectiveFrom, timeZone)}
+                  {tariff.effectiveTo && ` au ${dateLabel(tariff.effectiveTo, timeZone)}`}</p>
+                {exchangeRate && <p className="text-muted-foreground">{exchangeRate.cdfPerUsd.replace(".", ",")} CDF pour 1 USD · {exchangeRate.rateSource} · {dateLabel(exchangeRate.effectiveFrom, timeZone)}</p>}
+              </>} />
+          </details>
+        </>}
+        <p className="text-xs text-muted-foreground">Valorisation du point sélectionné. Choisissez celui qui couvre le bâtiment entier.</p>
+      </EnergyPanel>
+      <GeneratorCosts key={`${buildingId}:${from}:${to}:${currency}`} {...{ topology, buildingId, from, to, currency, timeZone }} />
+      <EnergyPanel title="Estimation historique en USD">
+        <EnergyRequestState status={historical.status} reload={estimate.reload} />
+        {historical.status === "ready" && <p className="text-xl font-semibold">
+          {typeof historical.data === "number" && Number.isFinite(historical.data) ? money.format(historical.data) : "Indisponible"}
+        </p>}
+        <p className="text-sm text-muted-foreground">Analyse historique au tarif global configuré.</p>
+      </EnergyPanel>
+    </div>
+  </>;
 }
 
 const severityLabels = { INFO: "Information", WARNING: "Avertissement", CRITICAL: "Critique" };

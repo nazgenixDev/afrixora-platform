@@ -31,7 +31,7 @@ function Measurements({ building, topology, period, hours, tab, controls, setCon
   const energyPoints = topology["metering-points"].filter(point =>
     point.scope === "BOARD" && point.flowDirection === "IMPORT" && point.measurementMode !== "INSTANTANEOUS");
   const powerPoints = topology["metering-points"].filter(point => point.measurementMode === "INSTANTANEOUS");
-  const energy = useEnergyQuery<MeteredEnergy>(energyId ? "/api/v1/energy/metered" : null, pointParams(energyId, true));
+  const energy = useEnergyQuery<MeteredEnergy>(energyId && tab === "overview" ? "/api/v1/energy/metered" : null, pointParams(energyId, true));
   const power = useEnergyQuery<MeteredPower>(powerId && tab === "overview" ? "/api/v1/energy/metered" : null, pointParams(powerId));
   const alerts = useEnergyQuery<PaginatedResponse<Alert>>(tab === "overview" ? "/api/v1/alerts" : null,
     new URLSearchParams({ buildingId: building.id, limit: "1", isRead: "false" }).toString());
@@ -72,7 +72,8 @@ function Measurements({ building, topology, period, hours, tab, controls, setCon
             ? `${alerts.result.data.total} alerte(s) non lue(s) pour ce bâtiment.` : "Aucune alerte non lue."}</p>}
         </EnergyPanel>
       </div>
-    </> : <FinanceView topology={topology} energy={measuredEnergy} estimate={estimate} />}
+    </> : <FinanceView topology={topology} buildingId={building.id} meteringPointId={energyId} from={from} to={to}
+      timeZone={siteTimeZone(building)} estimate={estimate} />}
   </>;
 }
 

@@ -13,13 +13,15 @@ const deviceId = id(3);
 const loadId = id(4);
 const sourceId = id(5);
 const energyId = id(6);
+const generatorId = id(21);
 const powerId = id(7);
 const ruleId = id(8);
 const now = new Date().toISOString();
 const page = data => ({ data, page: 1, total: data.length, totalPages: data.length ? 1 : 0 });
 const simulationRoot = "/api/v1/automations/energy-simulation/rules";
 const topology = {
-  sources: [{ id: sourceId, name: "Arrivée réseau", type: "GRID", status: "MAINTENANCE", ratedPowerW: "4000" }],
+  sources: [{ id: sourceId, name: "Arrivée réseau", type: "GRID", status: "MAINTENANCE", ratedPowerW: "4000" },
+    { id: generatorId, name: "Groupe fictif", type: "GENERATOR", status: "AVAILABLE", ratedPowerW: "6000" }],
   feeds: [{ id: id(9), name: "Arrivée tableau", sourceId, busId: id(10), observedState: "CLOSED", observedAt: now }],
   buses: [{ id: id(10), name: "Bus général" }],
   boards: [{ id: id(11), name: "Tableau général", busId: id(10), location: "Local technique" }],
@@ -74,6 +76,23 @@ function fixture(request, knownOrigin) {
     assert.equal(url.searchParams.get("buildingTotal"), "true");
     return [200, { measuredKWh: 100, estimatedKWh: null, samples: 2, gaps: 1, timeZone: "Africa/Lubumbashi",
       bySource: [{ measuredKWh: 100, estimatedKWh: null, sourceId, sourceType: "GRID" }] }];
+  }
+  if (path.endsWith("/energy/finance/costs")) {
+    assert.equal(url.searchParams.get("buildingId"), site);
+    assert.equal(url.searchParams.get("meteringPointId"), energyId);
+    const currency = url.searchParams.get("currency");
+    const amount = currency === "CDF" ? "25000.00" : "10.00";
+    return [200, { currency, calculatedAmount: amount, estimatedAmount: null, hasMissingData: true,
+      reasons: ["MEASUREMENT_GAPS"], bySource: [{ sourceId, sourceType: "GRID", measuredKWh: "100",
+        estimatedKWh: "0", unpricedKWh: "0", calculatedAmount: amount, estimatedAmount: null, reasons: [] }],
+      references: [{ tariff: { id: id(22), sourceId, unitPrice: "0.1", currency: "USD", effectiveFrom: now, effectiveTo: null },
+        exchangeRate: currency === "CDF" ? { id: id(23), cdfPerUsd: "2500", rateSource: "Taux de recette", effectiveFrom: now } : null }] }];
+  }
+  if (path.endsWith("/energy/finance/generator-costs")) {
+    assert.equal(url.searchParams.get("sourceId"), generatorId);
+    assert.equal(url.searchParams.get("currency"), "CDF");
+    return [200, page([{ entry: { id: id(24), periodFrom: now, periodTo: now, fuelLitres: "5", engineHours: "2" },
+      quote: { currency: "CDF", calculatedAmount: null, estimatedAmount: "1000.00", hasMissingData: true } }])];
   }
   if (path.endsWith("/energy/summary")) return [200, { totalKwh: 10, estimatedCostUSD: 1.2, peakPowerW: 300, avgPowerW: 200, deviceCount: 1 }];
   if (path.endsWith("/energy/consumption")) return [200, [{ bucket: now, total_kwh: 10, avg_power_w: 200 }]];
@@ -205,7 +224,15 @@ async function run() {
     assert.equal(await evaluate("document.documentElement.scrollWidth <= window.innerWidth"), true, "Vue mobile sans débordement horizontal");
 
     await tab("Finances");
-    await see("Dépense indisponible");
+    await see("Sur mesures : 10,00 USD");
+    await see("Couverture de mesure incomplète");
+    await select("Devise de calcul", "CDF");
+    await see("Sur mesures : 25000,00 CDF");
+    await evaluate('document.querySelector("details summary").click()');
+    await see("2500 CDF pour 1 USD");
+    await select("Groupe électrogène", generatorId);
+    await see("Estimé : 1000,00 CDF");
+    await see("Relevé, prix ou taux incomplet.");
     await see("Estimation historique en USD");
     await tab("Sources");
     await see("En maintenance");

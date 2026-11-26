@@ -231,6 +231,7 @@ model Building {
   zones              Zone[]
   devices            Device[]
   automations        Automation[]
+  energyExchangeRates EnergyExchangeRate[]
   alerts             Alert[]
   gateways           Gateway[]
   energySources      EnergySource[]
@@ -339,9 +340,66 @@ model EnergySource {
   building       Building           @relation(fields: [buildingId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Restrict)
   feeds          SourceFeed[]
   meteringPoints MeteringPoint[]
+  tariffs        EnergyTariff[]
+  generatorCosts GeneratorOperatingCost[]
 
   @@unique([id, tenantId, buildingId])
   @@index([tenantId, buildingId])
+}
+
+enum EnergyCurrency {
+  USD
+  CDF
+}
+
+model EnergyTariff {
+  id             String         @id @default(uuid())
+  tenantId       String
+  buildingId     String
+  sourceId       String
+  currency       EnergyCurrency
+  unit           String         @default("KWH")
+  unitPrice      Decimal        @db.Decimal(20, 8)
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  createdAt      DateTime       @default(now())
+  source         EnergySource   @relation(fields: [sourceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([tenantId, buildingId, sourceId, effectiveFrom])
+}
+
+model EnergyExchangeRate {
+  id             String         @id @default(uuid())
+  tenantId       String
+  buildingId     String
+  cdfPerUsd      Decimal        @db.Decimal(20, 8)
+  rateSource     String
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  createdAt      DateTime       @default(now())
+  building       Building       @relation(fields: [buildingId, tenantId], references: [id, tenantId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([tenantId, buildingId, effectiveFrom])
+}
+
+model GeneratorOperatingCost {
+  id                     String             @id @default(uuid())
+  tenantId               String
+  buildingId             String
+  sourceId               String
+  periodFrom             DateTime
+  periodTo               DateTime
+  currency               EnergyCurrency
+  fuelLitres             Decimal?           @db.Decimal(20, 6)
+  fuelQuality            MeasurementQuality?
+  fuelPricePerLitre      Decimal?           @db.Decimal(20, 8)
+  engineHours            Decimal?           @db.Decimal(20, 6)
+  hoursQuality           MeasurementQuality?
+  maintenanceCostPerHour Decimal?           @db.Decimal(20, 8)
+  createdAt              DateTime           @default(now())
+  source                 EnergySource       @relation(fields: [sourceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([tenantId, buildingId, sourceId, periodFrom], map: "GeneratorOperatingCost_source_period_key")
 }
 
 model EnergyBus {

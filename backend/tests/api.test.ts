@@ -844,3 +844,93 @@ describe.runIf(process.env.AFRIXORA_TEST_TIMESCALE === 'true')('Simulation éner
     }
   }, 30_000);
 });
+
+describe.runIf(process.env.AFRIXORA_TEST_TIMESCALE === 'true')('Tarifs et coûts par bâtiment', () => {
+  it('versionne les tarifs, chiffre un seul point général et cloisonne l’accès financier', async () => {
+    const site = { tenantId: local.id, buildingId: randomUUID() };
+    await prisma.building.create({ data: { id: site.buildingId, tenantId: site.tenantId,
+      name: 'Bâtiment de recette financière', address: 'Adresse fictive' } });
+    const topology = await prisma.$transaction(tx => createEnergyTopologyFixture(tx, site));
+    const device = await prisma.device.create({ data: { ...site, name: 'Compteur financier', type: 'ENERGY_METER' } });
+    const common = { ...site, deviceId: device.id, unit: 'kWh', measurementMode: 'CUMULATIVE', flowDirection: 'IMPORT' } as const;
+    const main = await prisma.meteringPoint.create({ data: { ...common, name: 'Général', scope: 'BOARD', boardId: topology.board.id } });
+    const sub = await prisma.meteringPoint.create({ data: { ...common, name: 'Divisionnaire', scope: 'CIRCUIT', circuitId: topology.circuit.id } });
+    const generator = await prisma.energySource.create({ data: { ...site, name: 'Groupe fictif', type: 'GENERATOR' } });
+    const root = api + '/energy/finance';
+    const receivedAt = Date.now();
+    const start = receivedAt - 600_000;
+    const at = (minute: number) => new Date(start + minute * 60_000).toISOString();
+    const baseTariff = { buildingId: site.buildingId, sourceId: topology.source.id, unit: 'KWH' };
+    const adminPost = (resource: string, data: object) =>
+      app.post(root + resource).set('Authorization', authorization).send(data);
+    const adminGet = (resource: string, query: object) =>
+      app.get(root + resource).set('Authorization', authorization).query(query);
+
+    try {
+      await adminPost('/tariffs', { ...baseTariff, currency: 'USD', unitPrice: 0.335, effectiveFrom: at(0) }).expect(400);
+      const first = await adminPost('/tariffs', { ...baseTariff, currency: 'USD', unitPrice: '0.335', effectiveFrom: at(0) }).expect(201);
+      const second = await adminPost('/tariffs', { ...baseTariff, currency: 'CDF', unitPrice: '1000', effectiveFrom: at(1) }).expect(201);
+      await adminPost('/tariffs', { ...baseTariff, currency: 'USD', unitPrice: '0.50', effectiveFrom: at(0), effectiveTo: at(2) }).expect(409);
+      await adminGet('/tariffs', { buildingId: site.buildingId, sourceId: topology.source.id }).expect(200)
+        .expect(({ body }) => expect(body.data).toMatchObject([
+          { id: second.body.id, currency: 'CDF', unitPrice: '1000' },
+          { id: first.body.id, currency: 'USD', effectiveTo: at(1), unitPrice: '0.335' },
+        ]));
+      const rate = await adminPost('/exchange-rates', { buildingId: site.buildingId, cdfPerUsd: '2500',
+        rateSource: 'Taux de recette fictif', effectiveFrom: at(0) }).expect(201);
+
+      const bootId = randomUUID();
+      for (const [point, quantities] of [[main, [0, 1, 2]], [sub, [0, 0.4, 0.8]]] as const) {
+        for (const [sequence, value] of quantities.entries()) {
+          expect(await persistTelemetry({ ...site, deviceId: device.id }, {
+            schemaVersion: 2, deviceId: device.id, meteringPointId: point.id, bootId, sequence, value,
+            capturedAt: at(sequence), metric: 'energy', unit: 'kWh', measurementMode: 'CUMULATIVE',
+            quality: 'MEASURED', origin: 'DEVICE', sourceFeedId: topology.feed.id,
+          }, receivedAt)).toBe('stored');
+        }
+      }
+      const window = { buildingId: site.buildingId, from: at(0), to: at(2) };
+      const costs = { ...window, meteringPointId: main.id, currency: 'USD' };
+      await adminGet('/costs', costs).expect(200).expect(({ body }) => expect(body).toMatchObject({
+        calculatedAmount: '0.74', estimatedAmount: null, hasMissingData: false,
+        bySource: [{ sourceId: topology.source.id, measuredKWh: '2', unpricedKWh: '0' }],
+        references: [{ tariff: { id: first.body.id }, exchangeRate: null },
+          { tariff: { id: second.body.id }, exchangeRate: { id: rate.body.id } }],
+      }));
+      await adminGet('/costs', { ...costs, currency: 'CDF', to: at(3) }).expect(200)
+        .expect(({ body }) => expect(body).toMatchObject({ calculatedAmount: '1837.50', hasMissingData: true }));
+      await adminGet('/costs', { ...costs, meteringPointId: sub.id }).expect(400);
+      await adminGet('/costs', { ...costs, from: at(3), to: at(4) }).expect(200)
+        .expect(({ body }) => expect(body).toMatchObject({ calculatedAmount: null, hasMissingData: true }));
+      await adminGet('/tariffs', { buildingId: local.buildingId, sourceId: topology.source.id }).expect(404);
+      const other = await bearer(foreign.email);
+      await app.get(root + '/costs').set('Authorization', other).query(costs).expect(404);
+      await app.get(root + '/exchange-rates').set('Authorization', operatorAuthorization).query({ buildingId: site.buildingId }).expect(403);
+      await app.post(root + '/tariffs').set('Authorization', other)
+        .send({ ...baseTariff, currency: 'USD', unitPrice: '0.5', effectiveFrom: at(3) }).expect(404);
+
+      const nextRate = { buildingId: site.buildingId, cdfPerUsd: '2600',
+        rateSource: 'Révision fictive', effectiveFrom: at(3) };
+      const updates = await Promise.all([adminPost('/exchange-rates', nextRate), adminPost('/exchange-rates', nextRate)]);
+      expect(updates.map(response => response.status).sort()).toEqual([201, 409]);
+      await adminGet('/exchange-rates', { buildingId: site.buildingId }).expect(200)
+        .expect(({ body }) => expect(body.data).toMatchObject([
+          { effectiveFrom: at(3), cdfPerUsd: '2600' },
+          { id: rate.body.id, effectiveTo: at(3) },
+        ]));
+
+      const operating = { buildingId: site.buildingId, sourceId: generator.id, periodFrom: at(0), periodTo: at(2),
+        currency: 'USD', fuelLitres: '10.5', fuelQuality: 'MEASURED', fuelPricePerLitre: '1.25',
+        engineHours: '0.02', hoursQuality: 'ESTIMATED', maintenanceCostPerHour: '25' };
+      await adminPost('/generator-costs', operating).expect(201);
+      await adminPost('/generator-costs', operating).expect(409);
+      await adminGet('/generator-costs', { ...window, sourceId: generator.id, currency: 'USD' }).expect(200)
+        .expect(({ body }) => expect(body.data[0].quote).toMatchObject({
+          calculatedAmount: '13.13', estimatedAmount: '0.50', hasMissingData: false,
+        }));
+    } finally {
+      await prisma.$executeRaw`DELETE FROM public.sensor_readings WHERE tenant_id = ${local.id}::uuid
+        AND device_id = ${device.id}::uuid AND metering_point_id IS NOT NULL`;
+    }
+  }, 30_000);
+});

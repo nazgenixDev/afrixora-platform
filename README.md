@@ -205,7 +205,7 @@ Ouvrir **Énergie** depuis le menu existant ou **Voir l’énergie** depuis la f
 | Sources | Type, disponibilité déclarée et dernière position horodatée par arrivée. La source courante est inconnue tant que l’API ne fournit pas de confirmation du transfert. |
 | Distribution | Tableaux, circuits, charges, priorités, compteurs et contrôleurs. Les liens ouvrent le détail de l’appareil dans le registre existant. |
 | Simulations | Règles et ordre des charges, hypothèses du scénario, exécution et historique. Accessible aux rôles administrateurs selon les droits du site. Les règles se configurent via l’API de phase 5. |
-| Finances | Énergie attribuée par source et estimation historique en USD au tarif global. La dépense par source, la version et la date d’effet du tarif et le taux USD/CDF restent indisponibles dans les API actuelles. |
+| Finances | Valorisation par source du point d’import sélectionné, couverture, tarifs et taux appliqués, en USD ou CDF. Les relevés de groupe et l’estimation historique au tarif global apparaissent séparément. |
 | Alertes et maintenance | Alertes du bâtiment, dates, état de lecture et sources signalées en maintenance. Un journal d’interventions et les heures de fonctionnement exigent des données supplémentaires. |
 | Analyses historiques | Courbes, répartition par zone et indicateurs historiques. L’export CSV conserve ses droits d’abonnement. |
 
@@ -222,6 +222,42 @@ node tests/energy-v2.browser.cjs
 ```
 
 Le test démarre Next.js sur la boucle locale et fournit une API fictive aux requêtes Chrome. Il couvre les mesures, la navigation mobile et bureau, les permissions, la simulation et l’ouverture de la fiche d’un appareil. Le test n’utilise ni base de production ni équipement. `AFRIXORA_CHROME_BIN` permet de préciser le binaire Chrome ou Chromium.
+
+## Coûts et tarifs énergétiques V2 (7A)
+
+Les routes suivantes sont sous `/api/v1/energy/finance`. Elles requièrent une session authentifiée et les droits du bâtiment. La saisie est réservée aux administrateurs autorisés sur le site. Le tenant est déterminé par la session.
+
+| Méthode et chemin | Paramètres ou objet |
+|---|---|
+| `GET /costs` | `buildingId`, `meteringPointId`, `from`, `to`, `currency` (`USD` par défaut ou `CDF`). |
+| `GET /tariffs` | `buildingId`, `sourceId`, `page`, `limit`. |
+| `POST /tariffs` | `buildingId`, `sourceId`, `unit: "KWH"`, `unitPrice`, `currency`, `effectiveFrom`, `effectiveTo` facultatif. |
+| `GET /exchange-rates` | `buildingId`, `page`, `limit`. |
+| `POST /exchange-rates` | `buildingId`, `cdfPerUsd`, `rateSource`, `effectiveFrom`, `effectiveTo` facultatif. |
+| `GET /generator-costs` | `buildingId`, `sourceId`, `from`, `to`, `currency`, `page`, `limit`. Renvoie les relevés entièrement compris dans la plage. |
+| `POST /generator-costs` | `buildingId`, `sourceId` (groupe), `periodFrom`, `periodTo`, `currency`, `fuelLitres`, `fuelQuality`, `fuelPricePerLitre`, `engineHours`, `hoursQuality`, `maintenanceCostPerHour`. Les relevés et prix indisponibles peuvent être omis. Si une quantité est indiquée, sa qualité est requise (`MEASURED` ou `ESTIMATED`). |
+
+Exemples fictifs, dans l’ordre tarif, taux, relevé d’exploitation du groupe.
+
+```json
+{"buildingId":"00000000-0000-4000-8000-000000000001","sourceId":"00000000-0000-4000-8000-000000000002","unit":"KWH","unitPrice":"0.335","currency":"USD","effectiveFrom":"2026-11-26T00:00:00+02:00"}
+```
+
+```json
+{"buildingId":"00000000-0000-4000-8000-000000000001","cdfPerUsd":"2500","rateSource":"Référence fictive","effectiveFrom":"2026-11-26T00:00:00+02:00"}
+```
+
+```json
+{"buildingId":"00000000-0000-4000-8000-000000000001","sourceId":"00000000-0000-4000-8000-000000000003","periodFrom":"2026-11-26T06:00:00+02:00","periodTo":"2026-11-26T08:00:00+02:00","currency":"USD","fuelLitres":"10.5","fuelQuality":"MEASURED","fuelPricePerLitre":"1.25","engineHours":"2","hoursQuality":"ESTIMATED","maintenanceCostPerHour":"0.25"}
+```
+
+- Les dates acceptent un décalage explicite ou `Z`. Les périodes tarifaires et les taux sont valables de la date d’effet incluse à la fin exclue. Une nouvelle version peut fermer la version précédente ouverte. Un autre chevauchement renvoie `409`.
+- Chaque demande de coûts utilise un seul compteur d’import sur tableau (`BOARD`). Vérifier que le compteur couvre bien le bâtiment. Les autres compteurs, dont les sous-compteurs, sont exclus. Une mesure d’index à la borne de fin sert à fermer le dernier intervalle.
+- Un prix et, si nécessaire, un taux historisé doivent couvrir l’intervalle entier. Les changements de source non attribuables, les traversées de version et les autres lacunes sont signalés. Les kWh connus sans valorisation sont conservés dans `unpricedKWh`. Pour les relevés d’énergie de période, la borne déduite du relevé précédent rend le coût estimé.
+- Les montants sont calculés en Decimal et sérialisés en chaînes, arrondies au centième après accumulation, à la moitié supérieure. Les sous-totaux affichés peuvent différer d’un centime du total arrondi. `null` signifie indisponible, tandis que `"0.00"` représente un montant valorisé à zéro. `references` fournit les versions appliquées, leurs dates et la provenance déclarée du taux.
+- Le coût du groupe distingue carburant (litres × prix au litre) et provision de maintenance (heures moteur × coût horaire). Il se consulte séparément de la dépense valorisée au kWh. Ces montants servent à l’estimation, avec une couverture dépendante des données et des prix renseignés.
+
+La migration additive `20261126010000_add_energy_costs` ajoute trois tables. Le coût opérationnel porte sur la saisie des versions, la vérification de leur provenance, le stockage des relevés et les lectures TimescaleDB bornées à 93 jours et 50 000 mesures par demande. Aucun abonnement à un fournisseur de change n’est requis. La recette HTTP de ce lot requiert `AFRIXORA_TEST_TIMESCALE=true` sur une base isolée.
 
 ## Tests backend
 
