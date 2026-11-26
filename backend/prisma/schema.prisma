@@ -345,6 +345,8 @@ model EnergySource {
   tariffs        EnergyTariff[]
   generatorCosts GeneratorOperatingCost[]
   fuelTanks      FuelTank[]
+  maintenanceHours MaintenanceHourReading[]
+  maintenancePlans MaintenancePlan[]
 
   @@unique([id, tenantId, buildingId])
   @@index([tenantId, buildingId])
@@ -503,6 +505,88 @@ model FuelAssessment {
 
   @@unique([tenantId, buildingId, tankId, periodFrom, periodTo, evidenceHash], map: "FuelAssessment_window_evidence_key")
   @@index([alertId, tenantId, buildingId])
+}
+
+enum MaintenanceTicketStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum MaintenanceEventType {
+  OPENED
+  ASSIGNED
+  STARTED
+  INTERVENTION
+  CANCELLED
+}
+
+model MaintenanceHourReading {
+  id          String       @id @default(uuid())
+  tenantId    String
+  buildingId  String
+  sourceId    String
+  capturedAt  DateTime
+  totalHours  Decimal      @db.Decimal(14, 3)
+  recordedBy  String
+  createdAt   DateTime     @default(now())
+  source      EnergySource @relation(fields: [sourceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([tenantId, buildingId, sourceId, capturedAt], map: "MaintenanceHourReading_source_time_key")
+}
+
+model MaintenancePlan {
+  id                    String              @id @default(uuid())
+  tenantId              String
+  buildingId            String
+  sourceId              String
+  title                 String
+  manufacturerReference String
+  intervalDays          Int?
+  intervalHours         Decimal?            @db.Decimal(10, 3)
+  startsAt              DateTime
+  initialTotalHours     Decimal?            @db.Decimal(14, 3)
+  initialReadingId      String?
+  createdBy             String
+  createdAt             DateTime            @default(now())
+  source                EnergySource        @relation(fields: [sourceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+  tickets               MaintenanceTicket[]
+
+  @@unique([id, tenantId, buildingId])
+  @@index([tenantId, buildingId, sourceId])
+}
+
+model MaintenanceTicket {
+  id                  String                  @id @default(uuid())
+  tenantId            String
+  buildingId          String
+  planId              String
+  responsibleUserId   String
+  status              MaintenanceTicketStatus @default(OPEN)
+  description         String
+  performedAt         DateTime?
+  performedTotalHours Decimal?                @db.Decimal(14, 3)
+  createdAt           DateTime                @default(now())
+  plan                MaintenancePlan         @relation(fields: [planId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+  events              MaintenanceEvent[]
+
+  @@unique([id, tenantId, buildingId])
+  @@index([tenantId, buildingId, planId, performedAt])
+}
+
+model MaintenanceEvent {
+  id          String               @id @default(uuid())
+  tenantId    String
+  buildingId  String
+  ticketId    String
+  type        MaintenanceEventType
+  actorUserId String
+  details     Json
+  createdAt   DateTime             @default(now())
+  ticket      MaintenanceTicket    @relation(fields: [ticketId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([tenantId, buildingId, ticketId, createdAt])
 }
 
 model EnergyBus {

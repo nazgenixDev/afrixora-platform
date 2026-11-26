@@ -98,6 +98,15 @@ function fixture(request, knownOrigin) {
   if (path.endsWith("/energy/summary")) return [200, { totalKwh: 10, estimatedCostUSD: 1.2, peakPowerW: 300, avgPowerW: 200, deviceCount: 1 }];
   if (path.endsWith("/energy/consumption")) return [200, [{ bucket: now, total_kwh: 10, avg_power_w: 200 }]];
   if (path.endsWith("/energy/by-zone")) return [200, []];
+  if (path.endsWith("/energy/maintenance/plans")) {
+    assert.equal(url.searchParams.get("buildingId"), site);
+    return [200, page([{ id: id(26), title: "Vidange programmée", sourceName: "Groupe fictif", manufacturerReference: "Notice constructeur fictive",
+      schedule: { status: "CHECK_HOURS", dueDate: null, dueTotalHours: "104", latestHours: "101" } }])];
+  }
+  if (path.endsWith("/energy/maintenance/tickets")) {
+    assert.equal(url.searchParams.get("buildingId"), site);
+    return [200, page([{ id: id(27), description: "Intervention fictive planifiée", plan: { title: "Vidange programmée" }, status: "OPEN" }])];
+  }
   if (path.endsWith("/alerts")) return [200, page([
     { id: id(16), tenantId, buildingId: site, type: "THRESHOLD", message: "Tension basse",
       severity: "WARNING", createdAt: now, metadata: {}, isRead: false },
@@ -245,6 +254,9 @@ async function run() {
     await see("Dernières positions observées");
     await tab("Alertes et maintenance");
     await see("Tension basse");
+    await see("Vidange programmée");
+    await see("Relevé d’heures à actualiser");
+    await see("Intervention fictive planifiée");
 
     await tab("Simulations");
     await see("Surcharge du tableau");

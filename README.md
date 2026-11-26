@@ -206,7 +206,7 @@ Ouvrir **Énergie** depuis le menu existant ou **Voir l’énergie** depuis la f
 | Distribution | Tableaux, circuits, charges, priorités, compteurs et contrôleurs. Les liens ouvrent le détail de l’appareil dans le registre existant. |
 | Simulations | Règles et ordre des charges, hypothèses du scénario, exécution et historique. Accessible aux rôles administrateurs selon les droits du site. Les règles se configurent via l’API de phase 5. |
 | Finances | Valorisation par source du point d’import sélectionné, couverture, tarifs et taux appliqués, en USD ou CDF. Les relevés de groupe et l’estimation historique au tarif global apparaissent séparément. |
-| Alertes et maintenance | Alertes du bâtiment, dates, état de lecture et sources signalées en maintenance. Un journal d’interventions et les heures de fonctionnement exigent des données supplémentaires. |
+| Alertes et maintenance | Alertes du bâtiment, sources signalées en maintenance, échéances d’entretien des groupes, heures relevées et tickets. |
 | Analyses historiques | Courbes, répartition par zone et indicateurs historiques. L’export CSV conserve ses droits d’abonnement. |
 
 La fiche **Appareils** affiche les charges reliées directement par un point de mesure ou un canal de commande. L’état déclaré, le suivi de la demande et de l’envoi, et la vérification physique horodatée sont présentés séparément. Le suivi de commande s’affiche quand l’API a rendu un identifiant de commande pendant la session.
@@ -305,6 +305,44 @@ Profil fictif pour trois points d’étalonnage. Les grandeurs décimales sont f
 - **Interprétation.** Comparer le volume de départ plus les livraisons moins le volume final à la plage attendue. En marche, la plage utilise les kWh, les coefficients et la provision maximale de consommation au ralenti. À l’arrêt, elle correspond à la marge de tolérance. Seules les plages disjointes produisent un écart à vérifier. Un écart peut refléter une livraison manquante, un problème de mesure ou une consommation différente des hypothèses.
 - **Historique.** Les rapports conservent les plages et les références ayant servi au calcul. Après saisie d’une livraison tardive, relancer l’évaluation. Elle crée une nouvelle version si les éléments changent. Une période expliquée clôt l’alerte existante. Les alertes restent visibles selon les droits du site dans le module Alertes. Les rapports de carburant sont consultables via l’API paginée.
 - **Exploitation.** La calibration et la saisie des événements exigent un suivi par site. Les rapports ne modifient ni les coûts de 7A ni le fonctionnement du groupe. La migration `20261126020000_add_generator_fuel_monitoring` ajoute cinq tables et le type d’alerte `FUEL_DISCREPANCY`. La recette HTTP utilise `AFRIXORA_TEST_TIMESCALE=true` sur une base isolée.
+
+## Entretien programmé des groupes (7C)
+
+Le suivi rattache les compteurs d’heures et les plans aux groupes existants. L’onglet **Énergie → Alertes et maintenance** affiche les échéances programmées et les tickets. Les saisies et le journal complet passent par l’API. Les heures de la phase 7A restent des quantités de période dédiées aux coûts. Ici, l’exploitant saisit un index cumulatif de durée de marche.
+
+Les routes sous `/api/v1/energy/maintenance` utilisent la session et les droits du bâtiment. Les mutations sont réservées aux administrateurs habilités. Les listes acceptent `page` et `limit`.
+
+| Route | Paramètres ou corps JSON |
+|---|---|
+| `GET /hours` | `buildingId`, `sourceId`. |
+| `POST /hours` | `buildingId`, `sourceId`, `capturedAt`, `totalHours` sous forme de chaîne décimale. |
+| `GET /plans` | `buildingId`, `sourceId` facultatif. Renvoie chaque plan et l’état calculé de son échéance. |
+| `POST /plans` | `buildingId`, `sourceId`, `title`, `manufacturerReference`, `startsAt`, `intervalDays` et/ou `intervalHours`. Pour un plan horaire, fournir l’`initialReadingId` du groupe à la date exacte `startsAt`. |
+| `GET /tickets` | `buildingId`, filtres facultatifs `planId` et `status`. |
+| `POST /tickets` | `buildingId`, `planId`, `responsibleUserId`, `description`. Un ticket ouvert ou en cours par plan. |
+| `PATCH /tickets` | `buildingId`, `ticketId`, `action` parmi `ASSIGN` (avec `responsibleUserId`), `START` et `CANCEL` (avec `reason`). |
+| `POST /interventions` | `buildingId`, `ticketId`, `performedAt`, `work` et `readingId` du groupe à la date exacte de l’intervention pour une échéance horaire. La clôture du ticket et l’événement d’audit forment une seule transaction. |
+| `GET /events` | `buildingId`, `ticketId`. Journal paginé avec l’acteur, l’horodatage et le détail. |
+
+Exemple de plan fictif avec un seuil suivant la première des deux échéances.
+
+```json
+{
+  "buildingId": "00000000-0000-4000-8000-000000000001",
+  "sourceId": "00000000-0000-4000-8000-000000000002",
+  "title": "Vidange programmée",
+  "manufacturerReference": "Notice fictive, chapitre Entretien",
+  "startsAt": "2026-11-26T08:00:00+02:00",
+  "initialReadingId": "00000000-0000-4000-8000-000000000003",
+  "intervalDays": 180,
+  "intervalHours": "250"
+}
+```
+
+- Saisir des index cumulatifs cohérents, y compris après remplacement d’un compteur en conservant le décalage vers l’index total. Un relevé rétroactif doit être compatible avec les relevés voisins. Un index de zéro est valide.
+- Le calendrier utilise les jours civils du fuseau du bâtiment, avec UTC comme repli. La dernière intervention terminée sert de nouvelle référence. `DUE` indique qu’un seuil calendaire ou horaire est atteint. `CHECK_HOURS` demande un relevé lorsque le temps écoulé ne permet plus d’écarter l’échéance horaire. Les seuils sont des rappels d’entretien programmé.
+- Les interventions portent sur un ticket démarré et sont enregistrées par un administrateur habilité. Le responsable doit avoir les droits du site au moment de son affectation et de l’intervention. Les identifiants du responsable et de l’acteur sont conservés dans l’audit, y compris après suppression d’un compte.
+- Le coût opérationnel tient à la tenue du registre d’heures et à la validation des intervalles à partir de la notice réelle. La migration additive `20261126030000_add_generator_maintenance` ajoute quatre tables. Les états et interventions sont déclaratifs et indépendants des commandes physiques.
 
 ## Tests backend
 

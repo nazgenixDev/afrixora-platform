@@ -1019,3 +1019,70 @@ describe.runIf(process.env.AFRIXORA_TEST_TIMESCALE === 'true')('Bilan de carbura
     }
   }, 30_000);
 });
+
+describe('Maintenance programmée', () => {
+  it('contrôle le compteur, les droits, le cycle du ticket et le recalcul après intervention', async () => {
+    publishCommand.mockClear();
+    const site = { tenantId: local.id, buildingId: randomUUID() };
+    await prisma.building.create({ data: { id: site.buildingId, tenantId: site.tenantId,
+      name: 'Site de maintenance fictif', address: 'Adresse fictive', timeZone: 'Africa/Lubumbashi' } });
+    const source = await prisma.energySource.create({ data: { ...site, name: 'Groupe d’essai', type: 'GENERATOR' } });
+    const spare = await prisma.energySource.create({ data: { ...site, name: 'Autre groupe d’essai', type: 'GENERATOR' } });
+    const root = api + '/energy/maintenance';
+    const post = (route: string, data: object) => app.post(root + route).set('Authorization', authorization).send(data);
+    const get = (route: string, query: object) => app.get(root + route).set('Authorization', authorization).query(query);
+    const context = { buildingId: site.buildingId };
+    const clock = Date.now();
+    const at = (shift: number) => new Date(clock + shift * 3_600_000).toISOString();
+    const index = { ...context, sourceId: source.id };
+    const { body: initial } = await post('/hours', { ...index, capturedAt: at(-12), totalHours: '100' }).expect(201);
+    await post('/hours', { ...index, capturedAt: at(-1), totalHours: '104' }).expect(201);
+    await post('/hours', { ...index, capturedAt: at(-2), totalHours: '105' }).expect(409);
+    await post('/hours', { ...index, capturedAt: at(-2), totalHours: '103' }).expect(201);
+    await post('/hours', { ...index, capturedAt: at(1), totalHours: '105' }).expect(400);
+    await get('/hours', { ...index, limit: 1 }).expect(200).expect(({ body }) => expect(body).toMatchObject({ total: 3, totalPages: 3 }));
+
+    const planInput = { ...index, title: 'Entretien planifié', manufacturerReference: 'Guide fictif § 4',
+      intervalHours: '4', intervalDays: 90, startsAt: at(-12), initialReadingId: initial.id };
+    await post('/plans', { ...planInput, sourceId: spare.id }).expect(404);
+    const { body: plan } = await post('/plans', planInput).expect(201);
+    await get('/plans', context).expect(200).expect(({ body }) => expect(body.data[0].schedule).toMatchObject({
+      status: 'DUE', dueTotalHours: '104', hoursDue: true, timeZone: 'Africa/Lubumbashi',
+    }));
+
+    const ticketInput = { ...context, planId: plan.id, responsibleUserId: local.userId, description: 'Entretien fictif du groupe' };
+    await post('/tickets', { ...ticketInput, responsibleUserId: foreign.userId }).expect(404);
+    const { body: ticket } = await post('/tickets', ticketInput).expect(201);
+    await post('/tickets', ticketInput).expect(409);
+    const ticketRef = { ...context, ticketId: ticket.id };
+    const patch = (action: object) => app.patch(root + '/tickets').set('Authorization', authorization).send({ ...ticketRef, ...action });
+    const operator = await prisma.user.findFirstOrThrow({ where: { tenantId: local.id, role: 'OPERATOR' } });
+    await patch({ action: 'ASSIGN', responsibleUserId: operator.id }).expect(404);
+    await app.get(root + '/plans').set('Authorization', operatorAuthorization).query(context).expect(403);
+    await prisma.buildingAccess.create({ data: { ...site, userId: operator.id } });
+    await patch({ action: 'ASSIGN', responsibleUserId: operator.id }).expect(200);
+    await patch({ action: 'START' }).expect(200);
+    const performedAt = new Date().toISOString();
+    const { body: wrongReading } = await post('/hours', { ...context, sourceId: spare.id, capturedAt: performedAt, totalHours: '1' }).expect(201);
+    const { body: reading } = await post('/hours', { ...index, capturedAt: performedAt, totalHours: '104.5' }).expect(201);
+    const completion = { ...ticketRef, performedAt, work: 'Entretien réalisé et consigné.' };
+    await post('/interventions', completion).expect(400);
+    await post('/interventions', { ...completion, readingId: wrongReading.id }).expect(404);
+    await post('/interventions', { ...completion, readingId: reading.id }).expect(201)
+      .expect(({ body }) => expect(body).toMatchObject({ status: 'COMPLETED', performedTotalHours: '104.5' }));
+    await post('/interventions', { ...completion, readingId: reading.id }).expect(409);
+
+    await get('/plans', context).expect(200).expect(({ body }) => expect(body.data[0].schedule).toMatchObject({
+      status: 'PLANNED', dueTotalHours: '108.5', hoursDue: false,
+    }));
+    await get('/events', ticketRef).expect(200).expect(({ body }) => {
+      expect(body.data.map((row: { type: string }) => row.type)).toEqual(['INTERVENTION', 'STARTED', 'ASSIGNED', 'OPENED']);
+      expect(body.data[0]).toMatchObject({ actorUserId: local.userId, details: { readingId: reading.id, responsibleUserId: operator.id } });
+    });
+    const other = await bearer(foreign.email);
+    await app.get(root + '/events').set('Authorization', other).query(ticketRef).expect(404);
+    await get('/events', { ...ticketRef, buildingId: local.buildingId }).expect(404);
+    await app.post(root + '/tickets').set('Authorization', operatorAuthorization).send(ticketInput).expect(403);
+    expect(publishCommand).not.toHaveBeenCalled();
+  }, 30_000);
+});

@@ -309,7 +309,56 @@ export function AlertsAndMaintenance({ topology, buildingId, timeZone }: { topol
     <EnergyPanel title="Maintenance déclarée">
       <EnergyList items={topology.sources.filter(source => source.status === "MAINTENANCE")}
         empty="Aucune source signalée en maintenance." render={source => <strong>{source.name}</strong>} />
-      <p className="text-sm text-muted-foreground">Le journal d’interventions et les heures de fonctionnement sont indisponibles.</p>
     </EnergyPanel>
+    <ScheduledMaintenance buildingId={buildingId} />
   </div>;
+}
+
+type MaintenancePlan = {
+  id: string; title: string; sourceName: string; sourceArchived: boolean; manufacturerReference: string;
+  schedule: { status: "DUE" | "CHECK_HOURS" | "PLANNED" | "NOT_STARTED"; dueDate: string | null;
+    dueTotalHours: string | null; latestHours: string | null };
+};
+type MaintenanceTicket = {
+  id: string; description: string; plan: { title: string }; status: "OPEN" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
+};
+const scheduleLabels = { DUE: "Entretien dû", CHECK_HOURS: "Relevé d’heures à actualiser", PLANNED: "Planifié", NOT_STARTED: "À venir" };
+const ticketLabels = { OPEN: "Ouvert", IN_PROGRESS: "En cours", COMPLETED: "Terminé", CANCELLED: "Annulé" };
+
+function ScheduledMaintenance({ buildingId }: { buildingId: string }) {
+  const [planPage, setPlanPage] = useState(1);
+  const [ticketPage, setTicketPage] = useState(1);
+  const params = (page: number) => new URLSearchParams({ buildingId, page: String(page), limit: "8" }).toString();
+  const plans = useEnergyQuery<PaginatedResponse<MaintenancePlan>>("/api/v1/energy/maintenance/plans", params(planPage));
+  const tickets = useEnergyQuery<PaginatedResponse<MaintenanceTicket>>("/api/v1/energy/maintenance/tickets", params(ticketPage));
+  return <>
+    <EnergyPanel title="Entretien programmé des groupes">
+      <EnergyRequestState status={plans.result.status} reload={plans.reload} />
+      {plans.result.status === "ready" && <>
+        <EnergyList items={plans.result.data.data} empty="Aucun plan d’entretien défini pour ce bâtiment." render={plan => <>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <strong>{plan.title} · {plan.sourceName}</strong>
+            <Badge variant="outline">{plan.sourceArchived ? "Groupe archivé" : scheduleLabels[plan.schedule.status]}</Badge>
+          </div>
+          <p className="text-muted-foreground">{plan.manufacturerReference}</p>
+          {plan.schedule.dueDate && <p>Échéance calendrier · {plan.schedule.dueDate}</p>}
+          {plan.schedule.dueTotalHours !== null && <p>Échéance compteur · {plan.schedule.dueTotalHours.replace(".", ",")} h
+            {plan.schedule.latestHours !== null && ` · Dernier relevé ${plan.schedule.latestHours.replace(".", ",")} h`}</p>}
+        </>} />
+        <PaginationControls page={planPage} totalPages={plans.result.data.totalPages} loading={false} onPageChange={setPlanPage} />
+      </>}
+    </EnergyPanel>
+    <EnergyPanel title="Tickets de maintenance">
+      <EnergyRequestState status={tickets.result.status} reload={tickets.reload} />
+      {tickets.result.status === "ready" && <>
+        <EnergyList items={tickets.result.data.data} empty="Aucun ticket pour ce bâtiment." render={ticket => <>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <strong>{ticket.plan.title}</strong><Badge variant="outline">{ticketLabels[ticket.status]}</Badge>
+          </div>
+          <p className="text-muted-foreground">{ticket.description}</p>
+        </>} />
+        <PaginationControls page={ticketPage} totalPages={tickets.result.data.totalPages} loading={false} onPageChange={setTicketPage} />
+      </>}
+    </EnergyPanel>
+  </>;
 }
