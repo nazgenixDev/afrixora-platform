@@ -26,9 +26,9 @@ Renseignez les valeurs d’exemple dans `.env.demo`, puis lancez `./start-demo.s
 
 Dans `.env.demo`, renseignez `SEED_DEMO_CLIENT_PASSWORD` avec un mot de passe propre au compte client. Avec la démo en cours, lancez `./start-demo.sh --sample-data`, puis connectez-vous avec `client@demo.afrixora.test` dans une session de navigateur dédiée.
 
-Le scénario contient le bâtiment fictif **Centre Horizon (démo)**, deux zones, des appareils, 30 jours de mesures simulées et deux alertes. Le client de démonstration utilise l’offre PRO pour accéder aux exports avec les permissions habituelles. Le chargement peut être relancé pour compléter l’historique horaire. Le mot de passe est défini à la création du compte.
+Le scénario contient le bâtiment fictif **Centre Horizon (démo)**, deux zones, des appareils, 30 jours de mesures historiques simulées et deux alertes. Il ajoute aussi huit jours de télémétrie V2 fictive avec des lacunes, une topologie SNEL/solaire/groupe, des tarifs USD et un taux CDF fictifs, ainsi qu’un plan et un ticket d’entretien. Le client de démonstration utilise l’offre PRO pour les exports. Relancer le chargement complète l’historique. Le mot de passe est défini à la création du compte.
 
-Depuis le tableau de bord, ouvrez **Énergie** pour lire les mesures, marquez une alerte comme lue dans **Alertes**, puis ouvrez **Rapports** pour télécharger le PDF avec le logo AFRIXORA.
+Dans **Énergie**, choisissez **Centre Horizon (démo)** et la période **24 h**. Dans **Vue d’ensemble**, sélectionnez **Index du tableau général (démo)** et **Puissance du tableau général (démo)**. Ouvrez ensuite **Sources**, **Distribution**, **Finances** ou **Alertes et maintenance**. Les rapports historiques restent accessibles depuis **Rapports**.
 
 ## Architecture
 
