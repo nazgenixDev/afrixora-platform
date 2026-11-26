@@ -55,6 +55,7 @@ enum Protocol {
 }
 
 enum AlertType {
+  FUEL_DISCREPANCY
   THRESHOLD
   OFFLINE
   AUTOMATION
@@ -281,6 +282,7 @@ model Device {
   zone             Zone?             @relation(fields: [zoneId], references: [id])
   states           DeviceState[]
   commands         DeviceCommand[]
+  fuelTanks        FuelTank[]
   alerts           Alert[]
   meteringPoints   MeteringPoint[]
   controlEndpoints ControlEndpoint[]
@@ -342,6 +344,7 @@ model EnergySource {
   meteringPoints MeteringPoint[]
   tariffs        EnergyTariff[]
   generatorCosts GeneratorOperatingCost[]
+  fuelTanks      FuelTank[]
 
   @@unique([id, tenantId, buildingId])
   @@index([tenantId, buildingId])
@@ -400,6 +403,106 @@ model GeneratorOperatingCost {
   source                 EnergySource       @relation(fields: [sourceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
 
   @@unique([tenantId, buildingId, sourceId, periodFrom], map: "GeneratorOperatingCost_source_period_key")
+}
+
+enum FuelEngineState {
+  RUNNING
+  STOPPED
+  UNKNOWN
+}
+
+enum FuelAssessmentStatus {
+  WITHIN_RANGE
+  LOSS_TO_REVIEW
+  SURPLUS_TO_REVIEW
+}
+
+model FuelTank {
+  id                String             @id @default(uuid())
+  tenantId          String
+  buildingId        String
+  sourceId          String
+  probeDeviceId     String
+  productionPointId String
+  name              String
+  createdAt         DateTime           @default(now())
+  source            EnergySource       @relation(fields: [sourceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  probe             Device             @relation(fields: [probeDeviceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  productionPoint   MeteringPoint      @relation(fields: [productionPointId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+  calibrations      FuelCalibration[]
+  deliveries        FuelDelivery[]
+  assessments       FuelAssessment[]
+
+  @@unique([id, tenantId, buildingId])
+  @@unique([tenantId, buildingId, sourceId])
+  @@unique([probeDeviceId, tenantId, buildingId])
+}
+
+model FuelCalibration {
+  id            String             @id @default(uuid())
+  tenantId      String
+  buildingId    String
+  tankId        String
+  effectiveFrom DateTime
+  profile       Json
+  createdAt     DateTime           @default(now())
+  tank          FuelTank           @relation(fields: [tankId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+  readings      FuelLevelReading[]
+
+  @@unique([id, tenantId, buildingId, tankId])
+  @@unique([tenantId, buildingId, tankId, effectiveFrom])
+}
+
+model FuelLevelReading {
+  id             String             @id @default(uuid())
+  tenantId       String
+  buildingId     String
+  tankId         String
+  calibrationId  String
+  capturedAt     DateTime
+  levelMm        Decimal            @db.Decimal(12, 3)
+  temperatureC   Decimal?           @db.Decimal(6, 3)
+  quality        MeasurementQuality
+  intervalState  FuelEngineState
+  createdAt      DateTime           @default(now())
+  calibration    FuelCalibration    @relation(fields: [calibrationId, tenantId, buildingId, tankId], references: [id, tenantId, buildingId, tankId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([tenantId, buildingId, tankId, capturedAt])
+}
+
+model FuelDelivery {
+  id                String   @id @default(uuid())
+  tenantId          String
+  buildingId        String
+  tankId            String
+  deliveredAt       DateTime
+  litresAt20C       Decimal  @db.Decimal(12, 3)
+  uncertaintyLitres Decimal  @db.Decimal(12, 3)
+  reference         String
+  createdAt         DateTime @default(now())
+  tank              FuelTank @relation(fields: [tankId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([tenantId, buildingId, tankId, reference])
+  @@index([tenantId, buildingId, tankId, deliveredAt])
+}
+
+model FuelAssessment {
+  id          String               @id @default(uuid())
+  tenantId    String
+  buildingId  String
+  tankId      String
+  periodFrom  DateTime
+  periodTo    DateTime
+  status      FuelAssessmentStatus
+  alertId     String?
+  evidence    Json
+  evidenceHash String
+  createdAt   DateTime             @default(now())
+  tank        FuelTank             @relation(fields: [tankId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Cascade, onUpdate: Restrict)
+  alert       Alert?               @relation(fields: [alertId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([tenantId, buildingId, tankId, periodFrom, periodTo, evidenceHash], map: "FuelAssessment_window_evidence_key")
+  @@index([alertId, tenantId, buildingId])
 }
 
 model EnergyBus {
@@ -542,6 +645,7 @@ model MeteringPoint {
   location        String?
   calibration     Json                  @default("{}")
   createdAt       DateTime              @default(now())
+  fuelTanks       FuelTank[]
   building        Building              @relation(fields: [buildingId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Restrict)
   device          Device                @relation(fields: [deviceId, tenantId, buildingId, deviceType], references: [id, tenantId, buildingId, type], onDelete: Restrict, onUpdate: Restrict)
   source          EnergySource?         @relation(fields: [sourceId, tenantId, buildingId], references: [id, tenantId, buildingId], onDelete: Restrict, onUpdate: Restrict)
@@ -556,6 +660,7 @@ model MeteringPoint {
   @@index([tenantId, buildingId, boardId])
   @@index([tenantId, buildingId, circuitId])
   @@index([tenantId, buildingId, loadId])
+  @@unique([id, tenantId, buildingId])
 }
 
 // L’approbation du canal et la vérification physique décrivent deux faits distincts.
@@ -645,10 +750,12 @@ model Alert {
   isRead     Boolean   @default(false)
   resolvedAt DateTime?
   createdAt  DateTime  @default(now())
+  fuelAssessments FuelAssessment[]
   building   Building  @relation(fields: [buildingId], references: [id])
   device     Device?   @relation(fields: [deviceId], references: [id])
 
   @@index([tenantId, buildingId, isRead])
+  @@unique([id, tenantId, buildingId])
 }
 
 model Gateway {

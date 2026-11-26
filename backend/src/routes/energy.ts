@@ -1,5 +1,6 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import energyFinance from './energyFinance';
+import energyFuel from './energyFuel';
 import { z } from 'zod';
 import { authenticate } from '../middleware/authenticate';
 import { buildingTimeZone } from '../utils/buildingTimeZone';
@@ -11,6 +12,7 @@ import type { EnergyPeriod } from '../services/energyQueries';
 
 const router = Router();
 router.use('/finance', energyFinance);
+router.use('/fuel', energyFuel);
 const energyQuery = z.object({
   buildingId: z.guid(),
   period: z.enum(['24h', '7d', '30d', '3m']).default('30d'),

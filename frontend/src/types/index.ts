@@ -71,7 +71,7 @@ export interface ZoneBucket {
   total_kwh: number;
 }
 
-export type AlertType = 'THRESHOLD' | 'OFFLINE' | 'AUTOMATION' | 'SYSTEM';
+export type AlertType = 'THRESHOLD' | 'OFFLINE' | 'AUTOMATION' | 'SYSTEM' | 'FUEL_DISCREPANCY';
 export type Severity = 'INFO' | 'WARNING' | 'CRITICAL';
 
 export interface Alert {

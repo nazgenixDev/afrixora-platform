@@ -62,6 +62,7 @@ export async function deleteTenantPermanently(id: string): Promise<void> {
       throw new AppError('Ce tenant héberge un compte super administrateur.', 409, 'PROTECTED_TENANT');
     }
 
+    await tx.fuelTank.deleteMany({ where });
     await tx.alert.deleteMany({ where });
     await tx.automation.deleteMany({ where });
     await tx.gateway.deleteMany({ where });

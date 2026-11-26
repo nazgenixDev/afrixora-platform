@@ -259,6 +259,53 @@ Exemples fictifs, dans l’ordre tarif, taux, relevé d’exploitation du groupe
 
 La migration additive `20261126010000_add_energy_costs` ajoute trois tables. Le coût opérationnel porte sur la saisie des versions, la vérification de leur provenance, le stockage des relevés et les lectures TimescaleDB bornées à 93 jours et 50 000 mesures par demande. Aucun abonnement à un fournisseur de change n’est requis. La recette HTTP de ce lot requiert `AFRIXORA_TEST_TIMESCALE=true` sur une base isolée.
 
+## Suivi du carburant des groupes (7B)
+
+Le suivi associe une cuve et une sonde du registre `Device` à un groupe et à son point V2 de production (`SOURCE`, `EXPORT`, `CUMULATIVE`). Cette version suit une cuve et une sonde par groupe. Les index électriques restent dans `sensor_readings`. Les relevés de niveau, la température et l’état du moteur sont déclarés par API. La sonde et le compteur doivent être étalonnés sur site pour interpréter les écarts.
+
+Les routes sous `/api/v1/energy/fuel` exigent une session et les droits du bâtiment. Les écritures requièrent un administrateur habilité. Le tenant est déterminé par la session.
+
+| Route | Données attendues |
+|---|---|
+| `GET /tanks` | `buildingId`, `page`, `limit`. |
+| `POST /tanks` | `buildingId`, `name`, `sourceId`, `probeDeviceId`, `productionPointId`. |
+| `GET /calibrations`, `/readings`, `/deliveries`, `/assessments` | `buildingId`, `tankId`, `page`, `limit`. |
+| `POST /calibrations` | `buildingId`, `tankId`, `effectiveFrom` et `profile`. |
+| `POST /readings` | `buildingId`, `tankId`, `capturedAt`, `levelMm`, `temperatureC` si mesurée, `quality`, `intervalState`. |
+| `POST /deliveries` | `buildingId`, `tankId`, `deliveredAt`, `litresAt20C`, `uncertaintyLitres` et `reference` unique par cuve. |
+| `GET /balance` | `buildingId`, `tankId`, `from`, `to`. Prévisualise le bilan. |
+| `POST /assessments` | Mêmes champs dans le JSON. Archive les bilans exploitables et crée ou actualise l’alerte associée. Un rejeu des mêmes éléments retourne le même rapport. |
+
+Profil fictif pour trois points d’étalonnage. Les grandeurs décimales sont fournies sous forme de chaînes. Le coefficient thermique, le bruit de la sonde et le modèle de consommation doivent provenir du site.
+
+```json
+{
+  "buildingId": "00000000-0000-4000-8000-000000000001",
+  "tankId": "00000000-0000-4000-8000-000000000002",
+  "effectiveFrom": "2026-11-26T06:00:00+02:00",
+  "profile": {
+    "points": [
+      {"levelMm": "0", "litres": "0"},
+      {"levelMm": "50", "litres": "20"},
+      {"levelMm": "100", "litres": "120"}
+    ],
+    "noiseMm": "0.25",
+    "toleranceLitres": "1",
+    "thermalCoefficientPerC": "0.001",
+    "minLitresPerKWh": "0.25",
+    "maxLitresPerKWh": "0.4",
+    "maxIdleLitresPerHour": "2",
+    "maxIntervalMinutes": 90
+  }
+}
+```
+
+- **Période.** Utiliser deux relevés de niveau consécutifs, à la même calibration, et des index de production mesurés, continus et présents aux deux mêmes bornes. Le relevé final déclare l’état moteur pendant l’intervalle entier. Indiquer `UNKNOWN` pour une transition ou une période incertaine. Toute production positive lors d’un arrêt déclaré rend le bilan indéterminé. La requête porte sur 24 h au plus et le profil peut fixer une limite plus courte.
+- **Volume.** Interpoler les points de hauteur-volume et convertir les volumes à 20 °C. Le bruit de la sonde définit une plage autour de chaque niveau. Une mesure hors courbe, estimée ou sans température rend le bilan indéterminé. Les livraisons sont déjà exprimées à 20 °C, avec leur incertitude. Une livraison à la même heure qu’un relevé est supposée déjà incluse dans ce relevé, d’où la fenêtre `(from, to]`.
+- **Interprétation.** Comparer le volume de départ plus les livraisons moins le volume final à la plage attendue. En marche, la plage utilise les kWh, les coefficients et la provision maximale de consommation au ralenti. À l’arrêt, elle correspond à la marge de tolérance. Seules les plages disjointes produisent un écart à vérifier. Un écart peut refléter une livraison manquante, un problème de mesure ou une consommation différente des hypothèses.
+- **Historique.** Les rapports conservent les plages et les références ayant servi au calcul. Après saisie d’une livraison tardive, relancer l’évaluation. Elle crée une nouvelle version si les éléments changent. Une période expliquée clôt l’alerte existante. Les alertes restent visibles selon les droits du site dans le module Alertes. Les rapports de carburant sont consultables via l’API paginée.
+- **Exploitation.** La calibration et la saisie des événements exigent un suivi par site. Les rapports ne modifient ni les coûts de 7A ni le fonctionnement du groupe. La migration `20261126020000_add_generator_fuel_monitoring` ajoute cinq tables et le type d’alerte `FUEL_DISCREPANCY`. La recette HTTP utilise `AFRIXORA_TEST_TIMESCALE=true` sur une base isolée.
+
 ## Tests backend
 
 Les tests unitaires RBAC et les tests d’intégration HTTP s’exécutent avec `npm test` depuis `backend`. Les tests HTTP utilisent une base PostgreSQL de test dédiée, déjà créée. Prisma y applique les migrations avant l’exécution. Le seed, TimescaleDB, Redis et MQTT ne sont pas requis.

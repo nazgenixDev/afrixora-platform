@@ -8,6 +8,7 @@ const { setTimeout: delay } = require("node:timers/promises");
 
 const id = number => `00000000-0000-4000-8000-${String(number).padStart(12, "0")}`;
 const site = id(1);
+const tenantId = id(20);
 const restricted = id(2);
 const deviceId = id(3);
 const loadId = id(4);
@@ -60,7 +61,7 @@ function fixture(request, knownOrigin) {
         projectedDemandBeforeW: null, projectedDemandAfterW: null, exclusions: [] } }];
     return [200, runs[0]];
   }
-  if (path.endsWith("/auth/me")) return [200, { user: { id: id(19), tenantId: id(20), role, name: "Compte fictif", email: "recette@example.test" } }];
+  if (path.endsWith("/auth/me")) return [200, { user: { id: id(19), tenantId, role, name: "Compte fictif", email: "recette@example.test" } }];
   if (path.endsWith("/tenants/current/subscription")) return [200, { limits: { hasExport: true }, plan: "PRO" }];
   if (path.endsWith("/buildings")) return [200, page([
     { id: site, name: "Site principal", timeZone: "Africa/Lubumbashi", isActive: true },
@@ -97,7 +98,12 @@ function fixture(request, knownOrigin) {
   if (path.endsWith("/energy/summary")) return [200, { totalKwh: 10, estimatedCostUSD: 1.2, peakPowerW: 300, avgPowerW: 200, deviceCount: 1 }];
   if (path.endsWith("/energy/consumption")) return [200, [{ bucket: now, total_kwh: 10, avg_power_w: 200 }]];
   if (path.endsWith("/energy/by-zone")) return [200, []];
-  if (path.endsWith("/alerts")) return [200, page([{ id: id(16), message: "Tension basse", severity: "WARNING", createdAt: now }])];
+  if (path.endsWith("/alerts")) return [200, page([
+    { id: id(16), tenantId, buildingId: site, type: "THRESHOLD", message: "Tension basse",
+      severity: "WARNING", createdAt: now, metadata: {}, isRead: false },
+    { id: id(25), tenantId, buildingId: site, type: "FUEL_DISCREPANCY", message: "Écart de carburant à vérifier.",
+      severity: "WARNING", createdAt: now, metadata: {}, isRead: false, resolvedAt: now },
+  ])];
   if (path.endsWith("/devices")) return [200, page([{ id: deviceId, buildingId: site, name: "Compteur du hall", type: "ENERGY_METER",
     isOnline: true, protocol: "MQTT", config: {}, states: [{ state: { state: "on", source: "device_reported" } }] }])];
   if (path.endsWith("/zones")) return [200, []];
@@ -265,6 +271,10 @@ async function run() {
     await see("Charges physiques liées");
     await see("État physique inconnu");
     await see("Dernier état physiquement vérifié");
+
+    await navigate("/alerts");
+    await see("Écart de carburant à vérifier");
+    await see("Écart expliqué");
 
     role = "VIEWER";
     await navigate(`/energy?buildingId=${restricted}&view=simulation`);

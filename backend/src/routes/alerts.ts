@@ -33,11 +33,11 @@ const withErrorHandler = (handler: (req: Request, res: Response) => Promise<void
 
 router.get('/', validate(alertQuerySchema), withErrorHandler(async (req, res) => {
   const { page, limit, ...filters }: z.infer<typeof alertQuerySchema>['query'] = res.locals.validatedQuery;
-  res.json(await alertService.findAll(req.user!.tenantId, filters, { page, limit }));
+  res.json(await alertService.findAll(req.user!, filters, { page, limit }));
 }));
 
 router.patch('/:id/read', authorizeOperator, validate(alertParamsSchema), withErrorHandler(async (req, res) => {
-  res.json(await alertService.markAsRead(req.params.id, req.user!.tenantId));
+  res.json(await alertService.markAsRead(req.params.id, req.user!));
 }));
 
 export default router;

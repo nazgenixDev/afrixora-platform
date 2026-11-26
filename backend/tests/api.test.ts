@@ -133,6 +133,7 @@ afterAll(async () => {
         prisma.apiLog.deleteMany({ where }),
         prisma.apiKey.deleteMany({ where }),
         prisma.gateway.deleteMany({ where }),
+        prisma.fuelTank.deleteMany({ where }),
         prisma.alert.deleteMany({ where }),
         prisma.automation.deleteMany({ where }),
         prisma.controlEndpoint.deleteMany({ where }),
@@ -931,6 +932,90 @@ describe.runIf(process.env.AFRIXORA_TEST_TIMESCALE === 'true')('Tarifs et coûts
     } finally {
       await prisma.$executeRaw`DELETE FROM public.sensor_readings WHERE tenant_id = ${local.id}::uuid
         AND device_id = ${device.id}::uuid AND metering_point_id IS NOT NULL`;
+    }
+  }, 30_000);
+});
+
+describe.runIf(process.env.AFRIXORA_TEST_TIMESCALE === 'true')('Bilan de carburant des groupes', () => {
+  it('calibre les relevés, compare la production, versionne le rapport et protège les alertes', async () => {
+    const site = { tenantId: local.id, buildingId: randomUUID() };
+    await prisma.building.create({ data: { id: site.buildingId, tenantId: site.tenantId, name: 'Site carburant fictif', address: 'Adresse fictive' } });
+    const source = await prisma.energySource.create({ data: { ...site, name: 'Groupe fictif', type: 'GENERATOR' } });
+    const probe = await prisma.device.create({ data: { ...site, name: 'Sonde fictive', type: 'SENSOR' } });
+    const meter = await prisma.device.create({ data: { ...site, name: 'Compteur fictif', type: 'ENERGY_METER' } });
+    const point = await prisma.meteringPoint.create({ data: { ...site, name: 'Production du groupe', sourceId: source.id,
+      deviceId: meter.id, scope: 'SOURCE', unit: 'kWh', measurementMode: 'CUMULATIVE', flowDirection: 'EXPORT' } });
+    const root = api + '/energy/fuel';
+    const post = (resource: string, data: object) => app.post(root + resource).set('Authorization', authorization).send(data);
+    const get = (resource: string, query: object) => app.get(root + resource).set('Authorization', authorization).query(query);
+    const now = Date.now();
+    const at = (minute: number) => new Date(now - (90 - minute) * 60_000).toISOString();
+    const tankInput = { name: 'Cuve fictive', buildingId: site.buildingId, sourceId: source.id,
+      probeDeviceId: probe.id, productionPointId: point.id };
+    const profile = { points: [{ levelMm: '0', litres: '0' }, { levelMm: '200', litres: '200' }],
+      noiseMm: '0.1', toleranceLitres: '1', thermalCoefficientPerC: '0.001', maxIntervalMinutes: 60,
+      minLitresPerKWh: '0.3', maxLitresPerKWh: '0.4', maxIdleLitresPerHour: '1' };
+
+    try {
+      await post('/tanks', { ...tankInput, probeDeviceId: foreign.deviceId }).expect(404);
+      const { body: tank } = await post('/tanks', tankInput).expect(201);
+      await app.delete(api + '/devices/' + probe.id).set('Authorization', authorization).expect(400)
+        .expect(({ body }) => expect(body.code).toBe('FOREIGN_KEY_CONSTRAINT_VIOLATION'));
+      const context = { buildingId: site.buildingId, tankId: tank.id };
+      const period = { ...context, from: at(1), to: at(31) };
+      const { body: calibration } = await post('/calibrations', { ...context, effectiveFrom: at(0), profile }).expect(201);
+      await post('/readings', { ...context, capturedAt: at(1), levelMm: '100', temperatureC: '20',
+        quality: 'MEASURED', intervalState: 'UNKNOWN' }).expect(201);
+      await post('/readings', { ...context, capturedAt: at(31), levelMm: '113', temperatureC: '20',
+        quality: 'MEASURED', intervalState: 'RUNNING' }).expect(201);
+      await post('/calibrations', { ...context, effectiveFrom: at(21), profile }).expect(409);
+      await post('/assessments', period).expect(200).expect(({ body }) =>
+        expect(body).toMatchObject({ status: 'INDETERMINATE', reason: 'PRODUCTION_INCOMPLETE', report: null }));
+
+      const bootId = randomUUID();
+      for (const [sequence, value] of [4, 24].entries()) {
+        expect(await persistTelemetry({ ...site, deviceId: meter.id }, { deviceId: meter.id, schemaVersion: 2,
+          meteringPointId: point.id, metric: 'energy', bootId, sequence, value, capturedAt: at(1 + 30 * sequence),
+          unit: 'kWh', quality: 'MEASURED', measurementMode: 'CUMULATIVE', origin: 'DEVICE' }, now)).toBe('stored');
+      }
+      await get('/balance', period).expect(200).expect(({ body }) => expect(body).toMatchObject({
+        status: 'SURPLUS_TO_REVIEW', report: null, productionKWh: '20', calibrationId: calibration.id,
+      }));
+      const report = await post('/assessments', period).expect(200);
+      const alertId = report.body.report.alertId;
+      expect(alertId).toEqual(expect.any(String));
+      await post('/assessments', period).expect(200).expect(({ body }) => expect(body.report.id).toBe(report.body.report.id));
+      const delivery = { ...context, deliveredAt: at(16), litresAt20C: '20', uncertaintyLitres: '1', reference: 'LIV-TEST' };
+      await post('/deliveries', delivery).expect(201);
+      await post('/deliveries', delivery).expect(409);
+      await post('/assessments', period).expect(200).expect(({ body }) => expect(body).toMatchObject({
+        status: 'WITHIN_RANGE', observedLitres: { min: '5.800', max: '8.200' }, report: { alertId: null },
+      }));
+      await get('/assessments', context).expect(200).expect(({ body }) => expect(body.total).toBe(2));
+      await post('/calibrations', { ...context, effectiveFrom: at(36), profile }).expect(201);
+      await post('/readings', { ...context, capturedAt: at(40), levelMm: '113', temperatureC: '20',
+        quality: 'MEASURED', intervalState: 'STOPPED' }).expect(201);
+      await get('/balance', { ...context, from: at(31), to: at(40) }).expect(200).expect(({ body }) =>
+        expect(body).toMatchObject({ status: 'INDETERMINATE', reason: 'CALIBRATION_CHANGED' }));
+
+      const other = await bearer(foreign.email);
+      await app.get(root + '/assessments').set('Authorization', other).query(context).expect(404);
+      await get('/assessments', { buildingId: local.buildingId, tankId: tank.id }).expect(404);
+      await app.get(root + '/assessments').set('Authorization', operatorAuthorization).query(context).expect(403);
+      const listAlerts = (header: string) => app.get(api + '/alerts').set('Authorization', header)
+        .query({ buildingId: site.buildingId, type: 'FUEL_DISCREPANCY' });
+      await listAlerts(authorization).expect(200).expect(({ body }) =>
+        expect(body.data).toMatchObject([{ id: alertId, message: 'Écart de carburant à vérifier.', resolvedAt: expect.any(String) }]));
+      await listAlerts(operatorAuthorization).expect(200).expect(({ body }) => expect(body.total).toBe(0));
+      await app.patch(api + '/alerts/' + alertId + '/read').set('Authorization', operatorAuthorization).expect(404);
+      await prisma.buildingAccess.create({ data: { ...site, userId: (await prisma.user.findFirstOrThrow({
+        where: { tenantId: local.id, role: 'OPERATOR' }, select: { id: true },
+      })).id } });
+      await listAlerts(operatorAuthorization).expect(200).expect(({ body }) => expect(body.total).toBe(1));
+      expect(publishCommand).not.toHaveBeenCalled();
+    } finally {
+      await prisma.$executeRaw`DELETE FROM public.sensor_readings WHERE tenant_id = ${local.id}::uuid
+        AND device_id = ${meter.id}::uuid AND metering_point_id IS NOT NULL`;
     }
   }, 30_000);
 });
